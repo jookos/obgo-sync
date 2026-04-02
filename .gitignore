@@ -1,0 +1,5 @@
+.env
+obgo
+vendor/
+obsidian-livesync/
+*.test
