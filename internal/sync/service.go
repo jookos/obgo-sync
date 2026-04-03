@@ -30,12 +30,6 @@ func New(db couchdb.Client, cr *crypto.Service, dataDir string) *Service {
 	}
 }
 
-// Pull fetches all remote documents and writes them to OBGO_DATA.
-func (s *Service) Pull(ctx context.Context) error { return ErrNotImplemented }
-
-// Push reads all files from OBGO_DATA and upserts them to CouchDB.
-func (s *Service) Push(ctx context.Context) error { return ErrNotImplemented }
-
 // Watch runs an initial Pull then starts concurrent watchers.
 // Blocks until ctx is cancelled.
 func (s *Service) Watch(ctx context.Context) error { return ErrNotImplemented }

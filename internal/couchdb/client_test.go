@@ -2,7 +2,6 @@ package couchdb
 
 import (
 	"context"
-	"errors"
 	"testing"
 )
 
@@ -40,14 +39,15 @@ func TestNew_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestHTTPClient_UnimplementedMethod(t *testing.T) {
-	c, err := New("http://admin:password@localhost:5984/vault")
+func TestHTTPClient_AllMetaDocs_NetworkError(t *testing.T) {
+	// Point at a non-existent server; expect a network error (not a panic).
+	c, err := New("http://admin:password@localhost:19999/vault")
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
 	ctx := context.Background()
 	_, err = c.AllMetaDocs(ctx)
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("expected ErrNotImplemented, got %v", err)
+	if err == nil {
+		t.Error("expected an error when server is unreachable, got nil")
 	}
 }

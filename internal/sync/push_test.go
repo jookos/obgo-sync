@@ -1,0 +1,119 @@
+package sync_test
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jookos/obgo/internal/crypto"
+	syncsvc "github.com/jookos/obgo/internal/sync"
+)
+
+func TestPush_EmptyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	if err := svc.Push(context.Background()); err != nil {
+		t.Fatalf("Push empty dir: %v", err)
+	}
+
+	if db.bulkDocsCalled {
+		t.Error("BulkDocs should not be called for empty dir")
+	}
+	if db.putMetaCalled {
+		t.Error("PutMeta should not be called for empty dir")
+	}
+}
+
+func TestPush_OneFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	content := []byte("hello obgo")
+	absPath := filepath.Join(tmpDir, "note.md")
+	if err := os.WriteFile(absPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := svc.Push(context.Background()); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if !db.bulkDocsCalled {
+		t.Error("BulkDocs should be called")
+	}
+	if !db.putMetaCalled {
+		t.Error("PutMeta should be called")
+	}
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta call, got %d", len(db.putMetaDocs))
+	}
+	meta := db.putMetaDocs[0]
+	if meta.Path != "note.md" {
+		t.Errorf("meta path: got %q, want %q", meta.Path, "note.md")
+	}
+	if meta.Size != int64(len(content)) {
+		t.Errorf("meta size: got %d, want %d", meta.Size, len(content))
+	}
+	if len(meta.Children) == 0 {
+		t.Error("meta should have at least one chunk ID")
+	}
+}
+
+func TestPush_SubdirFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	subDir := filepath.Join(tmpDir, "notes", "subdir")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "deep.md"), []byte("deep content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background()); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta call, got %d", len(db.putMetaDocs))
+	}
+	if db.putMetaDocs[0].Path != "notes/subdir/deep.md" {
+		t.Errorf("path: got %q, want %q", db.putMetaDocs[0].Path, "notes/subdir/deep.md")
+	}
+}
+
+func TestPush_E2EE(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("secret-password")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "secret.md"), []byte("private data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background()); err != nil {
+		t.Fatalf("Push E2EE: %v", err)
+	}
+
+	if !db.putMetaCalled {
+		t.Error("PutMeta should be called")
+	}
+	if !db.putMetaDocs[0].Encrypted {
+		t.Error("meta should be marked encrypted")
+	}
+
+	// Verify salt was stored in _local.
+	if _, ok := db.localDocs["obsidian_livesync_sync_parameters"]; !ok {
+		t.Error("salt should be stored in _local/obsidian_livesync_sync_parameters")
+	}
+}

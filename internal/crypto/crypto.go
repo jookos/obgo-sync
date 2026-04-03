@@ -1,13 +1,23 @@
 package crypto
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
+
+	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/pbkdf2"
 )
 
-// ErrNotImplemented is returned by stub methods that are not yet implemented.
-var ErrNotImplemented = errors.New("not implemented")
+// saltOfPassphrase is the static PBKDF2 salt used by V1 encryption.
+const saltOfPassphrase = "rHGMPtr6oWw7VSa3W3wpa8fT8U"
 
 // Service handles all E2EE operations for obgo-live.
 type Service struct {
@@ -43,14 +53,126 @@ func (s *Service) ChunkID(content []byte) string {
 	return "h:" + fmt.Sprintf("%x", sum)
 }
 
-// EncryptContent encrypts plaintext chunk data.
-// Not yet implemented.
+// EncryptContent encrypts plaintext chunk data using AES-256-GCM (V2 format).
+// If E2EE is not enabled, the data is base64-encoded and returned as-is.
+// The returned string has the prefix "%=" for V2 encrypted data.
 func (s *Service) EncryptContent(plaintext []byte) (string, error) {
-	return "", ErrNotImplemented
+	if !s.Enabled() {
+		return base64.StdEncoding.EncodeToString(plaintext), nil
+	}
+	key, err := s.hkdfKey()
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("crypto: AES new cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("crypto: AES-GCM: %w", err)
+	}
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("crypto: nonce generation: %w", err)
+	}
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil) // nonce prepended
+	return "%=" + base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
 // DecryptContent decrypts a chunk data string.
-// Not yet implemented.
+// If E2EE is not enabled, the data is base64-decoded and returned as-is.
+// If the data starts with "%=" it is V2 (HKDF-AES-256-GCM).
+// If the data starts with "%" (but not "%=") it is V1 (PBKDF2-AES-256-GCM).
 func (s *Service) DecryptContent(ciphertext string) ([]byte, error) {
-	return nil, ErrNotImplemented
+	if !s.Enabled() {
+		// No encryption: data is base64-encoded raw content.
+		return base64.StdEncoding.DecodeString(ciphertext)
+	}
+
+	switch {
+	case strings.HasPrefix(ciphertext, "%="):
+		return s.decryptV2(ciphertext[2:])
+	case strings.HasPrefix(ciphertext, "%"):
+		return s.decryptV1(ciphertext[1:])
+	default:
+		return nil, fmt.Errorf("crypto: unrecognised ciphertext prefix in %q", ciphertext[:min(len(ciphertext), 4)])
+	}
+}
+
+// decryptV2 decrypts HKDF-AES-256-GCM ciphertext (V2 format).
+// Format after base64-decode: [12-byte nonce][ciphertext+tag].
+func (s *Service) decryptV2(b64 string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("crypto v2: base64 decode: %w", err)
+	}
+	if len(data) < 12 {
+		return nil, errors.New("crypto v2: ciphertext too short")
+	}
+
+	key, err := s.hkdfKey()
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := data[:12]
+	encrypted := data[12:]
+	return aesGCMDecrypt(key, nonce, encrypted)
+}
+
+// decryptV1 decrypts PBKDF2-AES-256-GCM ciphertext (V1 format).
+// Format after base64-decode: [12-byte nonce][ciphertext+tag].
+func (s *Service) decryptV1(b64 string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, fmt.Errorf("crypto v1: base64 decode: %w", err)
+	}
+	if len(data) < 12 {
+		return nil, errors.New("crypto v1: ciphertext too short")
+	}
+
+	iterations := len(s.password) * 1000
+	if iterations == 0 {
+		iterations = 1000
+	}
+	key := pbkdf2.Key([]byte(s.password), []byte(saltOfPassphrase), iterations, 32, sha512.New)
+
+	nonce := data[:12]
+	encrypted := data[12:]
+	return aesGCMDecrypt(key, nonce, encrypted)
+}
+
+// hkdfKey derives the 32-byte AES key using HKDF-SHA256.
+func (s *Service) hkdfKey() ([]byte, error) {
+	r := hkdf.New(sha256.New, []byte(s.password), s.salt, nil)
+	key := make([]byte, 32)
+	if _, err := r.Read(key); err != nil {
+		return nil, fmt.Errorf("crypto: HKDF key derivation: %w", err)
+	}
+	return key, nil
+}
+
+// aesGCMDecrypt decrypts data with AES-256-GCM.
+func aesGCMDecrypt(key, nonce, data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: AES new cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: AES-GCM: %w", err)
+	}
+	plaintext, err := gcm.Open(nil, nonce, data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: AES-GCM decrypt: %w", err)
+	}
+	return plaintext, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

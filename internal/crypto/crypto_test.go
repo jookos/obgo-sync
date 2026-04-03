@@ -1,8 +1,8 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"testing"
 )
@@ -46,18 +46,60 @@ func TestChunkID_WithPassword_DifferentHash(t *testing.T) {
 	}
 }
 
-func TestEncryptContent_NotImplemented(t *testing.T) {
-	svc := New("password")
-	_, err := svc.EncryptContent([]byte("plaintext"))
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("expected ErrNotImplemented, got %v", err)
+func TestEncryptDecrypt_Roundtrip(t *testing.T) {
+	svc := New("test-password")
+	svc.SetSalt([]byte("test-salt-32-bytes-padding-here!"))
+
+	plaintext := []byte("hello, encrypted world!")
+
+	encrypted, err := svc.EncryptContent(plaintext)
+	if err != nil {
+		t.Fatalf("EncryptContent: %v", err)
+	}
+
+	if len(encrypted) < 2 || encrypted[:2] != "%=" {
+		t.Errorf("expected encrypted to start with '%%=', got %q", encrypted[:min(len(encrypted), 4)])
+	}
+
+	decrypted, err := svc.DecryptContent(encrypted)
+	if err != nil {
+		t.Fatalf("DecryptContent: %v", err)
+	}
+
+	if !bytes.Equal(plaintext, decrypted) {
+		t.Errorf("roundtrip mismatch: got %q, want %q", decrypted, plaintext)
 	}
 }
 
-func TestDecryptContent_NotImplemented(t *testing.T) {
+func TestEncryptContent_NoE2EE_Base64(t *testing.T) {
+	svc := New("")
+	plaintext := []byte("no encryption")
+
+	encoded, err := svc.EncryptContent(plaintext)
+	if err != nil {
+		t.Fatalf("EncryptContent (no E2EE): %v", err)
+	}
+
+	decoded, err := svc.DecryptContent(encoded)
+	if err != nil {
+		t.Fatalf("DecryptContent (no E2EE): %v", err)
+	}
+
+	if !bytes.Equal(plaintext, decoded) {
+		t.Errorf("no-E2EE roundtrip mismatch: got %q, want %q", decoded, plaintext)
+	}
+}
+
+func TestEncrypt_DifferentNonce(t *testing.T) {
 	svc := New("password")
-	_, err := svc.DecryptContent("ciphertext")
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Errorf("expected ErrNotImplemented, got %v", err)
+	svc.SetSalt([]byte("some-salt-32-bytes-padding-here!"))
+	plaintext := []byte("same content")
+
+	enc1, _ := svc.EncryptContent(plaintext)
+	enc2, _ := svc.EncryptContent(plaintext)
+
+	// Two encryptions of same plaintext should produce different ciphertexts (random nonce)
+	if enc1 == enc2 {
+		t.Error("two encryptions of same plaintext should differ due to random nonce")
 	}
 }
