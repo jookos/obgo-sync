@@ -169,6 +169,7 @@ func (s *Service) pushFile(ctx context.Context, absPath string) error {
 		MTime:     mtime,
 		Size:      info.Size(),
 		Children:  chunkIDs,
+		Eden:      map[string]interface{}{},
 		Encrypted: s.crypto.Enabled(),
 	}
 	if _, err := s.db.PutMeta(ctx, meta); err != nil {

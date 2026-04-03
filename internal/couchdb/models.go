@@ -2,16 +2,17 @@ package couchdb
 
 // MetaDoc represents a file metadata document in CouchDB.
 type MetaDoc struct {
-	ID        string   `json:"_id"`
-	Rev       string   `json:"_rev,omitempty"`
-	Type      string   `json:"type"`
-	CTime     int64    `json:"ctime"`
-	MTime     int64    `json:"mtime"`
-	Size      int64    `json:"size"`
-	Path      string   `json:"path"`
-	Children  []string `json:"children"`
-	Deleted   bool     `json:"_deleted,omitempty"`
-	Encrypted bool     `json:"e_,omitempty"`
+	ID        string                 `json:"_id"`
+	Rev       string                 `json:"_rev,omitempty"`
+	Type      string                 `json:"type"`
+	CTime     int64                  `json:"ctime"`
+	MTime     int64                  `json:"mtime"`
+	Size      int64                  `json:"size"`
+	Path      string                 `json:"path"`
+	Children  []string               `json:"children"`
+	Eden      map[string]interface{} `json:"eden"`
+	Deleted   bool                   `json:"_deleted,omitempty"`
+	Encrypted bool                   `json:"e_,omitempty"`
 }
 
 // ChunkDoc represents a data chunk document in CouchDB.
