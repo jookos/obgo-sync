@@ -41,32 +41,40 @@ func rootCmd() *cobra.Command {
 }
 
 func pullCmd(envFile *string) *cobra.Command {
-	var watch, silence, verbose bool
+	var watch, watchLocal, watchRemote, silence, verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "pull",
 		Short: "Pull documents from CouchDB to local vault",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd.Context(), *envFile, watch, silence, verbose, true)
+			wl := watchLocal || watch
+			wr := watchRemote || watch
+			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, true)
 		},
 	}
-	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep watching for remote changes after pull")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "watch for both local and remote changes after pull")
+	cmd.Flags().BoolVar(&watchLocal, "wl", false, "watch for local changes and push them after pull")
+	cmd.Flags().BoolVar(&watchRemote, "wr", false, "watch for remote changes and pull them after pull")
 	cmd.Flags().BoolVarP(&silence, "silence", "s", false, "suppress progress output")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "log each file synced during watch")
 	return cmd
 }
 
 func pushCmd(envFile *string) *cobra.Command {
-	var watch, silence, verbose bool
+	var watch, watchLocal, watchRemote, silence, verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "push",
 		Short: "Push local vault files to CouchDB",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd.Context(), *envFile, watch, silence, verbose, false)
+			wl := watchLocal || watch
+			wr := watchRemote || watch
+			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, false)
 		},
 	}
-	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "keep watching for local changes after push")
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "watch for both local and remote changes after push")
+	cmd.Flags().BoolVar(&watchLocal, "wl", false, "watch for local changes and push them after push")
+	cmd.Flags().BoolVar(&watchRemote, "wr", false, "watch for remote changes and pull them after push")
 	cmd.Flags().BoolVarP(&silence, "silence", "s", false, "suppress progress output")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "log each file synced during watch")
 	return cmd
@@ -94,7 +102,7 @@ func hostFromURL(rawURL string) string {
 	return u.Host
 }
 
-func run(parentCtx context.Context, envFile string, watch, silence, verbose, isPull bool) error {
+func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, silence, verbose, isPull bool) error {
 	// Load .env file if present; ignore error if file is missing.
 	_ = godotenv.Load(envFile)
 
@@ -174,9 +182,16 @@ func run(parentCtx context.Context, envFile string, watch, silence, verbose, isP
 	}
 
 	// Start watch mode if requested.
-	if watch {
+	if watchLocal || watchRemote {
 		if !silence {
-			fmt.Fprintf(os.Stderr, "Watching for local and remote changes...\n")
+			switch {
+			case watchLocal && watchRemote:
+				fmt.Fprintf(os.Stderr, "Watching for local and remote changes...\n")
+			case watchLocal:
+				fmt.Fprintf(os.Stderr, "Watching for local changes...\n")
+			default:
+				fmt.Fprintf(os.Stderr, "Watching for remote changes...\n")
+			}
 		}
 		if verbose {
 			svc.OnWatchEvent = func(path string, toRemote bool) {
@@ -187,7 +202,7 @@ func run(parentCtx context.Context, envFile string, watch, silence, verbose, isP
 				}
 			}
 		}
-		if err := svc.Watch(ctx); err != nil {
+		if err := svc.Watch(ctx, watchLocal, watchRemote); err != nil {
 			return fmt.Errorf("watch failed: %w", err)
 		}
 	}
