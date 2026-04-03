@@ -1,4 +1,4 @@
-.PHONY: test test-integration dev build couchdb
+.PHONY: test test-integration dev build couchdb image run-image
 
 test:
 	go test ./...
@@ -14,3 +14,6 @@ build:
 
 couchdb:
 	docker compose up -d couchdb
+
+image:
+	docker build -t jookos.org/obgo-sync .
