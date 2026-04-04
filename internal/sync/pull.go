@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jookos/obgo/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/couchdb"
 )
 
 // Pull fetches all remote documents and writes them to OBGO_DATA.

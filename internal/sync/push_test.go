@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jookos/obgo/internal/crypto"
-	syncsvc "github.com/jookos/obgo/internal/sync"
+	"github.com/jookos/obgo-sync/internal/crypto"
+	syncsvc "github.com/jookos/obgo-sync/internal/sync"
 )
 
 func TestPush_EmptyDir(t *testing.T) {

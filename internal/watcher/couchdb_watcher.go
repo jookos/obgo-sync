@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jookos/obgo/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/couchdb"
 )
 
 // RemoteWatcher watches the CouchDB _changes feed and applies remote changes to disk.

@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"github.com/fsnotify/fsnotify"
-	"github.com/jookos/obgo/internal/couchdb"
-	"github.com/jookos/obgo/internal/crypto"
-	"github.com/jookos/obgo/internal/watcher"
-	"github.com/jookos/obgo/lib/livesync"
+	"github.com/jookos/obgo-sync/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/crypto"
+	"github.com/jookos/obgo-sync/internal/watcher"
+	"github.com/jookos/obgo-sync/lib/livesync"
 )
 
 // ErrNotImplemented is returned by stub methods that are not yet implemented.

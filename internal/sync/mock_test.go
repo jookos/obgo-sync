@@ -3,7 +3,7 @@ package sync_test
 import (
 	"context"
 
-	"github.com/jookos/obgo/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/couchdb"
 )
 
 // mockClient implements couchdb.Client for testing.

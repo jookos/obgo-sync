@@ -35,8 +35,8 @@ Environment variables (or `.env` file loaded at startup):
 cmd/obgo/main.go          cobra CLI; wires config → HTTPClient → crypto.Service → sync.Service
 internal/config/          Config struct + Load() from env
 internal/couchdb/         Client interface + HTTPClient (net/http against CouchDB REST API)
-internal/crypto/          E2EE encrypt/decrypt (HKDF-SHA256 + AES-256-GCM)
-internal/sync/            pull.go, push.go, service.go — orchestration + Watch
+internal/crypto/          E2EE encrypt/decrypt
+internal/sync/            pull.go, push.go, service.go, conflict.go — orchestration + Watch
 internal/watcher/         RemoteWatcher (_changes feed), LocalWatcher (fsnotify), SuppressSet
 lib/livesync/             Pure helpers: EncodeDocID/DecodeDocID, Split/Assemble chunks
 docs/                     livesync-protocol.md, implementation-plan.md, architecture.md, flows.md
@@ -46,9 +46,17 @@ docs/                     livesync-protocol.md, implementation-plan.md, architec
 
 **`couchdb.Client` is an interface** — all business logic depends on it, making unit tests straightforward with a `mockClient` (see `internal/sync/*_test.go`).
 
-**Chunking**: files are split into 100 KB chunks (`lib/livesync/chunk.go`). Each chunk is content-addressed: its `_id` is `h:<sha256(content)>` (plain) or `h:+<sha256(content+passphrase)>` (E2EE). Chunks are uploaded via `_bulk_docs`; `409 Conflict` on a chunk means it already exists and is silently ignored.
+**Document ID encoding**: `lib/livesync.EncodeDocID` lowercases the path before using it as the CouchDB `_id`, matching Obsidian's normalisation. The `path` field on `MetaDoc` retains the original casing and is used for writing files to disk.
 
-**E2EE**: `crypto.Service` writes V2 (HKDF-AES-256-GCM, `%=` prefix) and reads both V2 and V1 (PBKDF2, `%` prefix). The HKDF salt is stored in `_local/obsidian_livesync_sync_parameters` in CouchDB; `Push` generates and persists a new salt if absent.
+**Chunking**: files are split into chunks (`lib/livesync/chunk.go`). Each chunk is content-addressed: its `_id` is `h:` + base36(xxhash64(`"${data}-${charCount}"`)) for plain, or `h:+` + the same hash for E2EE vaults. Chunks are uploaded via `_bulk_docs`; `409 Conflict` on a chunk means it already exists and is silently ignored.
+
+**E2EE** (`internal/crypto/crypto.Service`): the V2 format (`%=` prefix) uses a two-step key derivation matching the `octagonal-wheels` library used by the Obsidian plugin:
+1. `masterKey = PBKDF2-SHA256(passphrase, pbkdf2Salt, 310000, 32 bytes)` — derived once in `SetSalt` and cached
+2. `chunkKey = HKDF-SHA256(IKM=masterKey, salt=perChunkSalt, info="", 32 bytes)` — per chunk
+
+The binary layout of each encrypted chunk data field is `[IV(12)][HKDF_salt(32)][AES-256-GCM ciphertext+tag]`. The `pbkdf2Salt` is stored in `_local/obsidian_livesync_sync_parameters` in CouchDB; `Push` generates and persists a new one if absent. V1 (`%` prefix) uses PBKDF2-SHA512 with a static salt — supported for reading only.
+
+**Conflict resolution** (`internal/sync/conflict.go`): `resolveConflicts` picks the conflicting revision with the highest `mtime` as the winner, rewrites it as the authoritative revision if it differs from CouchDB's chosen winner, and tombstones all losing branches. Called on every meta doc during `Pull` and `Watch`.
 
 **Loop prevention in watch mode**: `watcher.SuppressSet` tracks absolute paths the app just wrote to disk. `LocalWatcher` drops fsnotify events for any suppressed path (2 s TTL, lazy eviction). This prevents the pull→write→fsnotify→push→pull cycle.
 

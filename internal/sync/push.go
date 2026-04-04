@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"unicode/utf8"
 
-	"github.com/jookos/obgo/internal/couchdb"
-	"github.com/jookos/obgo/lib/livesync"
+	"github.com/jookos/obgo-sync/internal/couchdb"
+	"github.com/jookos/obgo-sync/lib/livesync"
 )
 
 // Push reads all files from OBGO_DATA and upserts them to CouchDB.

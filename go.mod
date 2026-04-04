@@ -1,4 +1,4 @@
-module github.com/jookos/obgo
+module github.com/jookos/obgo-sync
 
 go 1.25.0
 

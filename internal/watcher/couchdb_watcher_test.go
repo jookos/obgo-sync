@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jookos/obgo/internal/couchdb"
-	"github.com/jookos/obgo/internal/watcher"
+	"github.com/jookos/obgo-sync/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/watcher"
 )
 
 // mockChangesClient is a couchdb.Client stub that returns a pre-loaded changes channel.

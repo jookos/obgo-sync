@@ -12,10 +12,10 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 
-	"github.com/jookos/obgo/internal/config"
-	"github.com/jookos/obgo/internal/couchdb"
-	"github.com/jookos/obgo/internal/crypto"
-	"github.com/jookos/obgo/internal/sync"
+	"github.com/jookos/obgo-sync/internal/config"
+	"github.com/jookos/obgo-sync/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/crypto"
+	"github.com/jookos/obgo-sync/internal/sync"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jookos/obgo/internal/couchdb"
+	"github.com/jookos/obgo-sync/internal/couchdb"
 )
 
 // resolveConflicts resolves CouchDB revision conflicts on a meta document.
