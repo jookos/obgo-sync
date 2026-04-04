@@ -1,8 +1,10 @@
-# obgo-live
+# obgo
 
 **GitHub**: https://github.com/jookos/obgo-sync
 
-`obgo-live` is a headless Go CLI that syncs an Obsidian vault with a CouchDB instance using the [Obsidian Livesync](https://github.com/vrtmrz/obsidian-livesync) protocol. It is a lightweight alternative to the Node.js-based Obsidian Livesync plugin, designed for containerized or server-side setups where no GUI is available — for example, to keep an Obsidian vault on disk alongside a QMD/MPC/LLM stack so that language-model tooling can read and write vault files.
+> **Disclaimer:** Most of this project was AI-generated, with some crucial manual edits. It works for me — both with E2EE encryption and without. Use at your own risk.
+
+`obgo` is a headless Go CLI that syncs an Obsidian vault with a CouchDB instance using the [Obsidian Livesync](https://github.com/vrtmrz/obsidian-livesync) protocol. It is a lightweight alternative to the Node.js-based Obsidian Livesync plugin, designed for containerized or server-side setups where no GUI is available — for example, to keep an Obsidian vault on disk alongside a QMD/MPC/LLM stack so that language-model tooling can read and write vault files.
 
 ---
 
@@ -90,9 +92,9 @@ You will need to create the target database manually before first use, or let th
 
 ## E2EE compatibility
 
-`obgo-live` is compatible with Obsidian Livesync's end-to-end encryption. Set `E2EE_PASSWORD` to the same passphrase as the plugin. The app supports both the current V2 format (PBKDF2-SHA256 → HKDF-SHA256 + AES-256-GCM, `%=` prefix) and the legacy V1 format (PBKDF2-SHA512 + AES-256-GCM, `%` prefix) for reading. New chunks are always written in V2 format.
+`obgo` is compatible with Obsidian Livesync's end-to-end encryption. Set `E2EE_PASSWORD` to the same passphrase as the plugin. The app supports both the current V2 format (PBKDF2-SHA256 → HKDF-SHA256 + AES-256-GCM, `%=` prefix) and the legacy V1 format (PBKDF2-SHA512 + AES-256-GCM, `%` prefix) for reading. New chunks are always written in V2 format.
 
-The HKDF salt is read from (and, on push, written to) the `_local/obsidian_livesync_sync_parameters` document in CouchDB — the same document used by the plugin.
+The PBKDF2 salt is read from (and, on push, written to) the `_local/obsidian_livesync_sync_parameters` document in CouchDB — the same document used by the plugin.
 
 ---
 
