@@ -27,6 +27,8 @@ type Client interface {
 	BulkGet(ctx context.Context, ids []string) ([]ChunkDoc, error)
 	BulkDocs(ctx context.Context, docs []interface{}) error
 	Changes(ctx context.Context, since string) (<-chan ChangeEvent, error)
+	GetMetaAtRev(ctx context.Context, id, rev string) (*MetaDoc, error)
+	DeleteRevision(ctx context.Context, id, rev string) error
 	GetLocal(ctx context.Context, id string) (map[string]interface{}, error)
 	PutLocal(ctx context.Context, id string, doc map[string]interface{}) error
 	ServerInfo(ctx context.Context) (map[string]interface{}, error)
@@ -174,7 +176,7 @@ func (c *HTTPClient) postJSON(ctx context.Context, rawURL string, body interface
 // AllMetaDocs fetches all non-chunk documents from CouchDB and returns those
 // with type "plain" or "newnote" that are not deleted.
 func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
-	rawURL := c.dbURL("_all_docs") + "?include_docs=true"
+	rawURL := c.dbURL("_all_docs") + "?include_docs=true&conflicts=true"
 	var result struct {
 		Rows []struct {
 			Doc *MetaDoc `json:"doc"`
@@ -201,13 +203,41 @@ func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 }
 
 // GetMeta fetches a single meta document by its encoded document ID.
+// The response includes the _conflicts field if any conflict revisions exist.
 func (c *HTTPClient) GetMeta(ctx context.Context, id string) (*MetaDoc, error) {
-	rawURL := c.dbURL(url.PathEscape(id))
+	rawURL := c.dbURL(url.PathEscape(id)) + "?conflicts=true"
 	var doc MetaDoc
 	if err := c.getJSON(ctx, rawURL, &doc); err != nil {
 		return nil, fmt.Errorf("GetMeta %q: %w", id, err)
 	}
 	return &doc, nil
+}
+
+// GetMetaAtRev fetches a specific revision of a meta document.
+// Used for conflict resolution to compare alternate revision branches.
+func (c *HTTPClient) GetMetaAtRev(ctx context.Context, id, rev string) (*MetaDoc, error) {
+	rawURL := c.dbURL(url.PathEscape(id)) + "?rev=" + url.QueryEscape(rev)
+	var doc MetaDoc
+	if err := c.getJSON(ctx, rawURL, &doc); err != nil {
+		return nil, fmt.Errorf("GetMetaAtRev %q@%s: %w", id, rev, err)
+	}
+	return &doc, nil
+}
+
+// DeleteRevision tombstones a specific revision branch of a document.
+// Used to resolve CouchDB conflicts by removing losing revision branches.
+func (c *HTTPClient) DeleteRevision(ctx context.Context, id, rev string) error {
+	rawURL := c.dbURL(url.PathEscape(id)) + "?rev=" + url.QueryEscape(rev)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("DeleteRevision %q@%s: %w", id, rev, err)
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("DeleteRevision %q@%s: %w", id, rev, err)
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // PutMeta creates or updates a meta document in CouchDB.

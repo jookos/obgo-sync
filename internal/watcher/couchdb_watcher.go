@@ -47,11 +47,12 @@ func (w *RemoteWatcher) Run(ctx context.Context) error {
 }
 
 // loadSeq reads the last persisted sequence number from the seq file.
-// Returns "0" if no file exists.
+// Returns "now" if no file exists, so we only watch new changes rather than
+// replaying all history (which would overwrite locally-edited files).
 func (w *RemoteWatcher) loadSeq() string {
 	data, err := os.ReadFile(w.seqFile)
 	if err != nil {
-		return "0"
+		return "now"
 	}
 	return string(data)
 }

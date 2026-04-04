@@ -71,3 +71,17 @@ Implement:
 
 Create documentation for the implementation that present the architecture, and the logic of the most important flows.
  
+## 9 Additional commands
+
+Implement pulling and pushing of individual items, as well as listing the content of the remote vault.
+
+```
+$ ./obgo pull path/within/vault.md   # pulls only that file
+$ ./obgo pull path/                  # pulls the specified folder and all its contents
+$ ./obgo push path/within/vault.md   # pushes only that file
+$ ./obgo push path/                  # pushes the specified folder and all its contents
+$ ./obgo list                        # lists the contents of the whole vault
+$ ./obgo list path/                  # lists the contents of a folder within the vault
+```
+
+## 10 

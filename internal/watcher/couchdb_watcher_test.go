@@ -46,6 +46,10 @@ func (m *mockChangesClient) GetLocal(ctx context.Context, id string) (map[string
 func (m *mockChangesClient) PutLocal(ctx context.Context, id string, doc map[string]interface{}) error {
 	return nil
 }
+func (m *mockChangesClient) GetMetaAtRev(ctx context.Context, id, rev string) (*couchdb.MetaDoc, error) {
+	return nil, couchdb.ErrNotFound
+}
+func (m *mockChangesClient) DeleteRevision(ctx context.Context, id, rev string) error { return nil }
 func (m *mockChangesClient) ServerInfo(ctx context.Context) (map[string]interface{}, error) {
 	return nil, nil
 }
@@ -233,6 +237,12 @@ func (c *captureSinceClient) GetLocal(ctx context.Context, id string) (map[strin
 }
 func (c *captureSinceClient) PutLocal(ctx context.Context, id string, doc map[string]interface{}) error {
 	return c.inner.PutLocal(ctx, id, doc)
+}
+func (c *captureSinceClient) GetMetaAtRev(ctx context.Context, id, rev string) (*couchdb.MetaDoc, error) {
+	return c.inner.GetMetaAtRev(ctx, id, rev)
+}
+func (c *captureSinceClient) DeleteRevision(ctx context.Context, id, rev string) error {
+	return c.inner.DeleteRevision(ctx, id, rev)
 }
 func (c *captureSinceClient) ServerInfo(ctx context.Context) (map[string]interface{}, error) {
 	return c.inner.ServerInfo(ctx)

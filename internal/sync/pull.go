@@ -21,7 +21,7 @@ func (s *Service) Pull(ctx context.Context) error {
 			return fmt.Errorf("pull: load salt: %w", err)
 		}
 		if params != nil {
-			if saltB64, ok := params["salt"].(string); ok {
+			if saltB64, ok := params["pbkdf2salt"].(string); ok {
 				saltBytes, err := base64.StdEncoding.DecodeString(saltB64)
 				if err == nil {
 					s.crypto.SetSalt(saltBytes)
@@ -36,10 +36,15 @@ func (s *Service) Pull(ctx context.Context) error {
 		return fmt.Errorf("pull: list docs: %w", err)
 	}
 
-	// 3. For each meta doc, fetch chunks, assemble, decrypt, write to disk.
+	// 3. For each meta doc, resolve any CouchDB conflicts, then apply to disk.
 	var count int
 	for _, doc := range docs {
-		if err := s.applyRemoteDoc(ctx, doc); err != nil {
+		resolved, rerr := s.resolveConflicts(ctx, doc)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "pull: resolve conflicts %q: %v\n", doc.Path, rerr)
+			resolved = doc
+		}
+		if err := s.applyRemoteDoc(ctx, resolved); err != nil {
 			return fmt.Errorf("pull: apply %q: %w", doc.Path, err)
 		}
 		count++
@@ -54,6 +59,10 @@ func (s *Service) Pull(ctx context.Context) error {
 // applyRemoteDoc fetches chunks for a meta doc, assembles the content and
 // writes it to the local filesystem.
 func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error {
+	// Skip internal state files that should never be synced.
+	if base := filepath.Base(doc.Path); len(base) > 5 && base[:5] == ".obgo" {
+		return nil
+	}
 	// Fetch chunks.
 	chunks, err := s.db.BulkGet(ctx, doc.Children)
 	if err != nil {

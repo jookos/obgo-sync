@@ -71,7 +71,12 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		}
 		if event.Doc != nil {
 			event.Doc.Path = path
-			if err := s.applyRemoteDoc(ctx, *event.Doc); err != nil {
+			resolved, rerr := s.resolveConflicts(ctx, *event.Doc)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "watch: resolve conflicts %q: %v\n", path, rerr)
+				resolved = *event.Doc
+			}
+			if err := s.applyRemoteDoc(ctx, resolved); err != nil {
 				return err
 			}
 			if s.OnWatchEvent != nil {

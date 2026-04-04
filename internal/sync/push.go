@@ -1,8 +1,8 @@
 package sync
 
 import (
-	cryptorand "crypto/rand"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -33,6 +33,10 @@ func (s *Service) Push(ctx context.Context) error {
 		if d.IsDir() {
 			return nil
 		}
+		// Skip internal state files.
+		if name := filepath.Base(path); len(name) > 5 && name[:5] == ".obgo" {
+			return nil
+		}
 		if err := s.pushFile(ctx, path); err != nil {
 			return err
 		}
@@ -51,7 +55,7 @@ func (s *Service) ensureSalt(ctx context.Context) error {
 		return err
 	}
 	if params != nil {
-		if saltB64, ok := params["salt"].(string); ok {
+		if saltB64, ok := params["pbkdf2salt"].(string); ok {
 			saltBytes, decErr := base64.StdEncoding.DecodeString(saltB64)
 			if decErr == nil {
 				s.crypto.SetSalt(saltBytes)
@@ -74,7 +78,7 @@ func (s *Service) ensureSalt(ctx context.Context) error {
 		}
 	}
 	doc := map[string]interface{}{
-		"salt": base64.StdEncoding.EncodeToString(salt),
+		"pbkdf2salt": base64.StdEncoding.EncodeToString(salt),
 	}
 	if rev != "" {
 		doc["_rev"] = rev
@@ -82,8 +86,18 @@ func (s *Service) ensureSalt(ctx context.Context) error {
 	return s.db.PutLocal(ctx, "obsidian_livesync_sync_parameters", doc)
 }
 
-// pushFile reads a local file, splits it into chunks, encrypts them (if E2EE
-// is enabled), uploads them via BulkDocs, then upserts the meta document.
+// pushFile reads a local file, splits it into chunks compatible with the
+// Obsidian Livesync protocol, uploads them via BulkDocs, then upserts the
+// meta document.
+//
+// Plain text files are split at DefaultTextChunkSize (1000) Unicode code
+// points; each chunk's data field is the raw UTF-8 string.
+//
+// Binary files are base64-encoded as a whole, then split at 102400 characters;
+// each chunk's data field is the base64 substring.
+//
+// Chunk IDs are computed with crypto.ChunkID, which uses xxHash-64 of
+// "${data}-${charCount}" encoded as base36 — matching Obsidian's algorithm.
 func (s *Service) pushFile(ctx context.Context, absPath string) error {
 	content, err := os.ReadFile(absPath)
 	if err != nil {
@@ -97,33 +111,46 @@ func (s *Service) pushFile(ctx context.Context, absPath string) error {
 	relPath = filepath.ToSlash(relPath)
 
 	// Determine doc type: plain (text) or newnote (binary).
-	// The livesync protocol stores plain-type chunk data as raw UTF-8 strings
-	// and newnote-type chunk data as base64-encoded bytes.
 	isText := utf8.Valid(content)
 	docType := "newnote"
 	if isText {
 		docType = "plain"
 	}
 
-	// Split into chunks and encrypt.
-	rawChunks := livesync.Split(content, 0)
-	chunkIDs := make([]string, 0, len(rawChunks))
-	chunkDocs := make([]interface{}, 0, len(rawChunks))
+	// Build data chunks (the strings stored in each chunk doc's data field).
+	//
+	// Obsidian plain:   split UTF-8 text at 1000 code points
+	// Obsidian newnote: base64-encode full file, split at 102400 chars
+	var dataChunks []string
+	if isText {
+		dataChunks = livesync.SplitText(string(content), 0)
+	} else {
+		encoded := base64.StdEncoding.EncodeToString(content)
+		for len(encoded) > 0 {
+			size := livesync.DefaultChunkSize
+			if size > len(encoded) {
+				size = len(encoded)
+			}
+			dataChunks = append(dataChunks, encoded[:size])
+			encoded = encoded[size:]
+		}
+	}
 
-	for _, chunk := range rawChunks {
+	chunkIDs := make([]string, 0, len(dataChunks))
+	chunkDocs := make([]interface{}, 0, len(dataChunks))
+
+	for _, chunk := range dataChunks {
 		id := s.crypto.ChunkID(chunk)
 		chunkIDs = append(chunkIDs, id)
 
 		var data string
 		if s.crypto.Enabled() {
-			data, err = s.crypto.EncryptContent(chunk)
+			data, err = s.crypto.EncryptContent([]byte(chunk))
 			if err != nil {
 				return fmt.Errorf("encrypt chunk: %w", err)
 			}
-		} else if isText {
-			data = string(chunk)
 		} else {
-			data = base64.StdEncoding.EncodeToString(chunk)
+			data = chunk
 		}
 
 		chunkDocs = append(chunkDocs, &couchdb.ChunkDoc{
@@ -177,4 +204,3 @@ func (s *Service) pushFile(ctx context.Context, absPath string) error {
 	}
 	return nil
 }
-

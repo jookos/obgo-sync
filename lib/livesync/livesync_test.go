@@ -85,8 +85,10 @@ func TestEncodeDocID_NormalPath(t *testing.T) {
 	}{
 		{"notes/foo.md", "notes/foo.md"},
 		{"daily/2024-01-01.md", "daily/2024-01-01.md"},
-		{"README.md", "README.md"},
+		{"README.md", "readme.md"},
 		{"folder/sub/file.txt", "folder/sub/file.txt"},
+		{"Test.md", "test.md"},
+		{"Folder/Sub/File.md", "folder/sub/file.md"},
 	}
 	for _, tc := range cases {
 		got := EncodeDocID(tc.path)
@@ -111,11 +113,11 @@ func TestEncodeDocID_PathStartingWithUnderscore(t *testing.T) {
 }
 
 func TestEncodeDocID_SpecialChars(t *testing.T) {
-	// Paths with spaces and unicode should pass through unchanged.
-	path := "my notes/café notes.md"
-	got := EncodeDocID(path)
-	if got != path {
-		t.Errorf("EncodeDocID(%q) = %q, want %q", path, got, path)
+	// Paths with spaces and unicode are lowercased.
+	got := EncodeDocID("my notes/café notes.md")
+	want := "my notes/café notes.md"
+	if got != want {
+		t.Errorf("EncodeDocID(%q) = %q, want %q", "my notes/café notes.md", got, want)
 	}
 }
 

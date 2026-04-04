@@ -6,9 +6,11 @@ import "strings"
 var nonFileIDPrefixes = []string{"h:", "i:", "f:", "ix:"}
 
 // EncodeDocID converts a vault-relative file path to a CouchDB document ID.
-// Paths starting with "_" get a "/" prepended (e.g. "_foo" → "/_foo")
-// to avoid conflicts with CouchDB's reserved "_" namespace.
+// The ID is always lowercased so obgo uses the same document as Obsidian,
+// which normalises IDs to lowercase. Paths starting with "_" get a "/"
+// prepended (e.g. "_foo" → "/_foo") to avoid CouchDB's reserved namespace.
 func EncodeDocID(path string) string {
+	path = strings.ToLower(path)
 	if strings.HasPrefix(path, "_") {
 		return "/" + path
 	}

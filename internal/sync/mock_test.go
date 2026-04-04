@@ -96,6 +96,14 @@ func (m *mockClient) PutLocal(ctx context.Context, id string, doc map[string]int
 	return nil
 }
 
+func (m *mockClient) GetMetaAtRev(ctx context.Context, id, rev string) (*couchdb.MetaDoc, error) {
+	return nil, couchdb.ErrNotFound
+}
+
+func (m *mockClient) DeleteRevision(ctx context.Context, id, rev string) error {
+	return nil
+}
+
 func (m *mockClient) ServerInfo(ctx context.Context) (map[string]interface{}, error) {
 	return map[string]interface{}{"couchdb": "Welcome"}, nil
 }

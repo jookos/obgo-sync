@@ -13,6 +13,7 @@ type MetaDoc struct {
 	Eden      map[string]interface{} `json:"eden"`
 	Deleted   bool                   `json:"_deleted,omitempty"`
 	Encrypted bool                   `json:"e_,omitempty"`
+	Conflicts []string               `json:"_conflicts,omitempty"`
 }
 
 // ChunkDoc represents a data chunk document in CouchDB.

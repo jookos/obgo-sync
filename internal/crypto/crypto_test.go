@@ -2,29 +2,37 @@ package crypto
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"fmt"
+	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 func TestChunkID_WithoutPassword(t *testing.T) {
 	svc := New("")
-	content := []byte("hello world")
+	data := "hello world"
 
-	id := svc.ChunkID(content)
+	id := svc.ChunkID(data)
 
-	sum := sha256.Sum256(content)
-	expected := "h:" + fmt.Sprintf("%x", sum)
+	// Verify format: "h:" + base36(xxhash64("${data}-${charCount}"))
+	length := utf8.RuneCountInString(data)
+	input := data + "-" + strconv.Itoa(length)
+	expected := "h:" + strconv.FormatUint(xxhash.Sum64String(input), 36)
 	if id != expected {
 		t.Errorf("ChunkID without password: got %q, want %q", id, expected)
+	}
+	if !strings.HasPrefix(id, "h:") {
+		t.Errorf("ChunkID should start with 'h:', got %q", id)
 	}
 }
 
 func TestChunkID_Deterministic(t *testing.T) {
 	svc := New("")
-	content := []byte("some content")
-	id1 := svc.ChunkID(content)
-	id2 := svc.ChunkID(content)
+	data := "some content"
+	id1 := svc.ChunkID(data)
+	id2 := svc.ChunkID(data)
 	if id1 != id2 {
 		t.Errorf("ChunkID should be deterministic: %q != %q", id1, id2)
 	}
@@ -33,16 +41,36 @@ func TestChunkID_Deterministic(t *testing.T) {
 func TestChunkID_WithPassword_DifferentHash(t *testing.T) {
 	svcPlain := New("")
 	svcE2EE := New("mysecret")
-	content := []byte("hello world")
+	data := "hello world"
 
-	idPlain := svcPlain.ChunkID(content)
-	idE2EE := svcE2EE.ChunkID(content)
+	idPlain := svcPlain.ChunkID(data)
+	idE2EE := svcE2EE.ChunkID(data)
 
 	if idPlain == idE2EE {
 		t.Error("ChunkID with and without password should differ")
 	}
 	if len(idE2EE) < 3 || idE2EE[:3] != "h:+" {
 		t.Errorf("ChunkID with password should start with 'h:+', got %q", idE2EE)
+	}
+}
+
+func TestChunkID_FormatMatchesObsidian(t *testing.T) {
+	// Obsidian Livesync uses xxHash-64 of "${data}-${charCount}" encoded as
+	// base36 (lowercase alphanumeric). IDs for short content are 10-13 chars.
+	svc := New("")
+	id := svc.ChunkID("hello world")
+	// Must start with "h:" and be followed by lowercase base36 digits.
+	if !strings.HasPrefix(id, "h:") {
+		t.Fatalf("expected h: prefix, got %q", id)
+	}
+	suffix := id[2:]
+	for _, ch := range suffix {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')) {
+			t.Errorf("non-base36 char %q in ID %q", ch, id)
+		}
+	}
+	if len(suffix) < 8 || len(suffix) > 13 {
+		t.Errorf("unexpected ID length %d for %q: %q", len(suffix), "hello world", id)
 	}
 }
 
