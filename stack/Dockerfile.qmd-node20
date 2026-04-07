@@ -1,0 +1,55 @@
+# Start with the official Node 20 image (Debian Bookworm)
+FROM node:20-bookworm-slim AS base
+
+# 1. Install build tools + SQLite + Python
+# node-llama-cpp MUST have these to compile successfully.
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    curl \
+    git \
+    sqlite3 \
+    cmake \
+    socat \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Install Bun (QMD specifically uses Bun for execution)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
+
+# 3. Fix the 'node' binary
+# In this image, 'node' already exists and is v20. 
+# We just need to make sure 'bun' is the global installer.
+RUN bun --version && node -v
+
+WORKDIR /app
+
+# 4. Install QMD globally via Bun
+# This will trigger the node-llama-cpp build.
+# This part takes a few minutes—don't cancel it!
+RUN bun install -g @tobilu/qmd
+
+# 5. Environment Variables
+# We use /data/qmd.sqlite to keep it inside your mount
+ENV PATH="/root/.bun/bin:$PATH"
+ENV QMD_DB_PATH="/data/qmd.sqlite"
+ENV QMD_CACHE_DIR="/data/.cache/qmd"
+ENV XDG_CACHE_HOME="/data/.cache"
+
+# 6. Setup data directory
+RUN mkdir -p /data/vault /data/.cache/qmd
+VOLUME /data
+
+# 7. Expose MCP port
+EXPOSE 8181
+
+# 8. Start script
+# Make sure your start-qmd.sh uses #!/usr/bin/env bash or #!/bin/sh
+COPY start-qmd.sh .
+RUN chmod +x start-qmd.sh
+
+# Run the actual mcp on 127.0.0.1:8180, bridge 0.0.0.0:8181 -> 127.0.0.1:8180 in the startup script
+ENTRYPOINT ["/app/start-qmd.sh"]
+CMD ["mcp", "--http", "--port", "8180"]

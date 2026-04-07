@@ -20,7 +20,7 @@ RUN apk add --no-cache ca-certificates
 ## scratch (addgroup / adduser wont work)
 # FROM scratch AS runtime
 
-RUN addgroup -S obgo && adduser -S obgo -G obgo
+RUN addgroup -g 1000 -S obgo && adduser -u 1000 -S obgo -G obgo
 
 WORKDIR /app
 

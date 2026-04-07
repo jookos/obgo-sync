@@ -1,0 +1,28 @@
+name: obsidian-qmd-stack
+services:
+  # 1. The Sync Engine
+  obgo:
+    image: jookos.org/obgo-sync:latest
+    user: "${VAULT_USER:-0:0}"
+    restart: unless-stopped
+    environment:
+      - COUCHDB_URL=${COUCHDB_URL}
+      - OBGO_DATA=/vault
+    volumes:
+      - ${VAULT_BIND:-obsidian_data}:/vault
+
+  # 2. The Search Engine (QMD)
+  qmd:
+    image: jookos.org/qmd:latest
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-8181}:8181"
+    environment:
+      - NODE_OPTIONS="--dns-result-order=ipv4first"
+    volumes:
+      - ${VAULT_BIND:-obsidian_data}:/data/vault:ro   # Read-only access to the synced notes
+      - ${QMD_CACHE_BIND:-qmd_cache}:/data/.cache/qmd # Persist the vector database
+
+volumes:
+  obsidian_data:
+  qmd_cache:
