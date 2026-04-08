@@ -25,11 +25,12 @@ type Service struct {
 	crypto       *crypto.Service
 	dataDir      string
 	suppress     *watcher.SuppressSet
-	OnPullFile   func(n int)
-	OnPushFile   func(n int)
-	OnWatchEvent func(path string, toRemote bool)
-	OnDeleteFile func(path string)  // called when a local file is removed (pull or watch)
-	OnTombstone  func(path string)  // called when a remote doc is tombstoned (push or watch)
+	OnPullFile        func(n int)
+	OnPushFile        func(n int)
+	OnWatchEvent      func(path string, toRemote bool)
+	OnDeleteFile      func(path string)             // called when a local file is removed (pull or watch)
+	OnTombstone       func(path string)             // called when a remote doc is tombstoned (push or watch)
+	OnRawChangeEvent  func(event couchdb.ChangeEvent) // called for every raw _changes event (debug)
 }
 
 // New creates a new sync Service.
@@ -73,6 +74,9 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 	}
 
 	remoteOnEvent := func(ctx context.Context, event couchdb.ChangeEvent) error {
+		if s.OnRawChangeEvent != nil {
+			s.OnRawChangeEvent(event)
+		}
 		// Skip non-file documents (chunk IDs h:..., index IDs i:/f:/ix:..., etc.)
 		_, isFile := livesync.DecodeDocID(event.ID)
 		if !isFile {
