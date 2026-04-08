@@ -191,6 +191,16 @@ func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 		if row.Doc == nil {
 			continue
 		}
+		if row.Doc.Deleted {
+			// Lean tombstones created by Obsidian/PouchDB (HTTP DELETE) have no
+			// type field. Identify file docs by ruling out known non-file ID prefixes.
+			id := row.Doc.ID
+			if !strings.HasPrefix(id, "h:") && !strings.HasPrefix(id, "i:") &&
+				!strings.HasPrefix(id, "f:") && !strings.HasPrefix(id, "ix:") {
+				docs = append(docs, *row.Doc)
+			}
+			continue
+		}
 		if row.Doc.Type != "plain" && row.Doc.Type != "newnote" {
 			continue
 		}

@@ -129,6 +129,35 @@ func TestPull_SingleFilePath(t *testing.T) {
 	}
 }
 
+// TestPull_DeletesLocalFileForLeanTombstone covers the case where Obsidian/PouchDB
+// deletes a document via HTTP DELETE, producing a lean tombstone with no path or
+// type field — only _id, _rev, and _deleted:true.
+func TestPull_DeletesLocalFileForLeanTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Create the local file that was deleted on the remote.
+	absPath := filepath.Join(tmpDir, "lean-deleted.md")
+	if err := os.WriteFile(absPath, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Lean tombstone: no Path, no Type — only ID and Deleted flag.
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: "lean-deleted.md", Deleted: true},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("expected local file to be removed after pulling lean tombstone")
+	}
+}
+
 func TestPull_DeletesLocalFileForRemoteTombstone(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := newMockClient()

@@ -93,11 +93,19 @@ func (s *Service) Pull(ctx context.Context, filter string) error {
 func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error {
 	// Handle remote deletions: remove the local file.
 	if doc.Deleted {
-		absPath := filepath.Join(s.dataDir, filepath.FromSlash(doc.Path))
-		s.suppress.Add(absPath)
-		_ = os.Remove(absPath)
-		if s.OnDeleteFile != nil {
-			s.OnDeleteFile(doc.Path)
+		// Lean tombstones (from Obsidian/PouchDB HTTP DELETE) have no path field;
+		// fall back to decoding the document ID.
+		path := doc.Path
+		if path == "" {
+			path, _ = livesync.DecodeDocID(doc.ID)
+		}
+		if path != "" {
+			absPath := filepath.Join(s.dataDir, filepath.FromSlash(path))
+			s.suppress.Add(absPath)
+			_ = os.Remove(absPath)
+			if s.OnDeleteFile != nil {
+				s.OnDeleteFile(path)
+			}
 		}
 		return nil
 	}
