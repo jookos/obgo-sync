@@ -96,7 +96,7 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		}
 
 		if event.Deleted {
-			absPath := filepath.Join(s.dataDir, filepath.FromSlash(path))
+			absPath := resolveCase(s.dataDir, path)
 			s.suppress.Add(absPath)
 			_ = os.Remove(absPath)
 			if s.OnDeleteFile != nil {

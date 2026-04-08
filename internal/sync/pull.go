@@ -100,7 +100,9 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 			path, _ = livesync.DecodeDocID(doc.ID)
 		}
 		if path != "" {
-			absPath := filepath.Join(s.dataDir, filepath.FromSlash(path))
+			// resolveCase handles case mismatches between the lowercase doc ID
+			// and the original-cased path stored on a case-sensitive filesystem.
+			absPath := resolveCase(s.dataDir, path)
 			s.suppress.Add(absPath)
 			_ = os.Remove(absPath)
 			if s.OnDeleteFile != nil {
