@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jookos/obgo-sync/internal/couchdb"
 	"github.com/jookos/obgo-sync/internal/crypto"
 	syncsvc "github.com/jookos/obgo-sync/internal/sync"
 )
@@ -140,6 +141,56 @@ func TestPush_SingleFilePath(t *testing.T) {
 	}
 	if db.putMetaDocs[0].Path != "wanted.md" {
 		t.Errorf("pushed wrong file: got %q, want %q", db.putMetaDocs[0].Path, "wanted.md")
+	}
+}
+
+func TestPush_TombstonesRemoteDocForMissingLocalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Remote has a doc that no longer exists locally.
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: "gone.md", Type: "plain", Path: "gone.md", Rev: "1-aaa"},
+	}
+	// Local vault is empty.
+
+	if err := svc.Push(context.Background(), ""); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta (tombstone) call, got %d", len(db.putMetaDocs))
+	}
+	if !db.putMetaDocs[0].Deleted {
+		t.Error("expected remote doc to be tombstoned (Deleted: true)")
+	}
+	if db.putMetaDocs[0].Path != "gone.md" {
+		t.Errorf("tombstoned wrong doc: got %q, want %q", db.putMetaDocs[0].Path, "gone.md")
+	}
+}
+
+func TestPush_SingleFileTombstonesWhenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Remote has the doc; local file was deleted.
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: "note.md", Type: "plain", Path: "note.md", Rev: "1-bbb"},
+	}
+
+	if err := svc.Push(context.Background(), "note.md"); err != nil {
+		t.Fatalf("Push single missing file: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta (tombstone) call, got %d", len(db.putMetaDocs))
+	}
+	if !db.putMetaDocs[0].Deleted {
+		t.Error("expected remote doc to be tombstoned (Deleted: true)")
 	}
 }
 

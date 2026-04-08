@@ -88,8 +88,19 @@ func (s *Service) Pull(ctx context.Context, filter string) error {
 }
 
 // applyRemoteDoc fetches chunks for a meta doc, assembles the content and
-// writes it to the local filesystem.
+// writes it to the local filesystem. If the doc is a tombstone (_deleted:true),
+// the corresponding local file is removed instead.
 func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error {
+	// Handle remote deletions: remove the local file.
+	if doc.Deleted {
+		absPath := filepath.Join(s.dataDir, filepath.FromSlash(doc.Path))
+		s.suppress.Add(absPath)
+		_ = os.Remove(absPath)
+		if s.OnDeleteFile != nil {
+			s.OnDeleteFile(doc.Path)
+		}
+		return nil
+	}
 	// Skip internal state files that should never be synced.
 	if base := filepath.Base(doc.Path); len(base) > 5 && base[:5] == ".obgo" {
 		return nil

@@ -220,6 +220,9 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 				count = n
 				fmt.Fprintf(os.Stderr, "\rPulled %d file(s)", n)
 			}
+			svc.OnDeleteFile = func(path string) {
+				fmt.Fprintf(os.Stderr, "\n  deleted %s", path)
+			}
 			if err := svc.Pull(ctx, filter); err != nil {
 				fmt.Fprintln(os.Stderr)
 				return fmt.Errorf("pull failed: %w", err)
@@ -238,6 +241,9 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 			svc.OnPushFile = func(n int) {
 				count = n
 				fmt.Fprintf(os.Stderr, "\rPushed %d file(s)", n)
+			}
+			svc.OnTombstone = func(path string) {
+				fmt.Fprintf(os.Stderr, "\n  deleted %s (remote)", path)
 			}
 			if err := svc.Push(ctx, filter); err != nil {
 				fmt.Fprintln(os.Stderr)
@@ -266,10 +272,16 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 		if verbose {
 			svc.OnWatchEvent = func(path string, toRemote bool) {
 				if toRemote {
-					fmt.Fprintf(os.Stderr, "  → %s (to remote)\n", path)
+					fmt.Fprintf(os.Stderr, "  → %s (updated on local)\n", path)
 				} else {
-					fmt.Fprintf(os.Stderr, "  ← %s (from remote)\n", path)
+					fmt.Fprintf(os.Stderr, "  ← %s (updated on remote)\n", path)
 				}
+			}
+			svc.OnDeleteFile = func(path string) {
+				fmt.Fprintf(os.Stderr, "  ✗ %s (deleted on remote)\n", path)
+			}
+			svc.OnTombstone = func(path string) {
+				fmt.Fprintf(os.Stderr, "  ✗ %s (deleted on local)\n", path)
 			}
 		}
 		if err := svc.Watch(ctx, watchLocal, watchRemote); err != nil {

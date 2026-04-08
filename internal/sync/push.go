@@ -31,7 +31,19 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 	if filter != "" && !strings.HasSuffix(filter, "/") {
 		absPath := filepath.Join(s.dataDir, filepath.FromSlash(filter))
 		if _, err := os.Stat(absPath); err != nil {
-			return fmt.Errorf("push: %q not found locally", filter)
+			// File missing locally: tombstone the remote doc if it exists.
+			docID := livesync.EncodeDocID(filter)
+			existing, gerr := s.db.GetMeta(ctx, docID)
+			if gerr == nil && !existing.Deleted {
+				existing.Deleted = true
+				if _, perr := s.db.PutMeta(ctx, existing); perr != nil {
+					return fmt.Errorf("push: tombstone %q: %w", filter, perr)
+				}
+				if s.OnTombstone != nil {
+					s.OnTombstone(filter)
+				}
+			}
+			return nil
 		}
 		if err := s.pushFile(ctx, absPath); err != nil {
 			return err
@@ -47,8 +59,9 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 	if filter != "" {
 		walkRoot = filepath.Join(s.dataDir, filepath.FromSlash(filter))
 	}
+	pushedPaths := make(map[string]struct{})
 	var count int
-	return filepath.WalkDir(walkRoot, func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(walkRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -62,12 +75,43 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		if err := s.pushFile(ctx, path); err != nil {
 			return err
 		}
+		relPath, _ := filepath.Rel(s.dataDir, path)
+		pushedPaths[filepath.ToSlash(relPath)] = struct{}{}
 		count++
 		if s.OnPushFile != nil {
 			s.OnPushFile(count)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// 4. Reconcile: tombstone remote docs that no longer exist locally.
+	remoteDocs, err := s.db.AllMetaDocs(ctx)
+	if err != nil {
+		return fmt.Errorf("push: list remote for reconcile: %w", err)
+	}
+	for _, remote := range remoteDocs {
+		if remote.Deleted {
+			continue // already tombstoned
+		}
+		// Only reconcile paths inside the walked scope.
+		if filter != "" && !strings.HasPrefix(remote.Path, filter) {
+			continue
+		}
+		if _, ok := pushedPaths[remote.Path]; ok {
+			continue // was just pushed — still exists
+		}
+		remote.Deleted = true
+		if _, err := s.db.PutMeta(ctx, &remote); err != nil {
+			fmt.Fprintf(os.Stderr, "push: tombstone %q: %v\n", remote.Path, err)
+			continue
+		}
+		if s.OnTombstone != nil {
+			s.OnTombstone(remote.Path)
+		}
+	}
+	return nil
 }
 
 // ensureSalt loads the HKDF salt from CouchDB or generates and stores a new one.

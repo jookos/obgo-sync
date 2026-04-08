@@ -129,6 +129,37 @@ func TestPull_SingleFilePath(t *testing.T) {
 	}
 }
 
+func TestPull_DeletesLocalFileForRemoteTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Create a local file that was deleted on the remote.
+	absPath := filepath.Join(tmpDir, "deleted.md")
+	if err := os.WriteFile(absPath, []byte("stale content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Mock returns a tombstone doc for the file.
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:      "deleted.md",
+			Type:    "plain",
+			Path:    "deleted.md",
+			Deleted: true,
+		},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("expected local file to be removed after pulling tombstone")
+	}
+}
+
 func TestPull_FolderPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := newMockClient()
