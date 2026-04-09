@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jookos/obgo-sync/internal/couchdb"
 )
@@ -31,7 +32,18 @@ func (s *Service) resolveConflicts(ctx context.Context, doc couchdb.MetaDoc) (co
 			losers = append(losers, rev)
 			continue
 		}
-		if candidate.MTime > winner.MTime {
+		// Lean tombstones from PouchDB/Obsidian carry MTime=0 because the HTTP
+		// DELETE response body has no fields beyond _id/_rev/_deleted. Treat them
+		// as "deleted just now" so a fresh deletion beats an older content revision.
+		candidateMTime := candidate.MTime
+		if candidate.Deleted && candidateMTime == 0 {
+			candidateMTime = time.Now().UnixMilli()
+		}
+		winnerMTime := winner.MTime
+		if winner.Deleted && winnerMTime == 0 {
+			winnerMTime = time.Now().UnixMilli()
+		}
+		if candidateMTime > winnerMTime {
 			losers = append(losers, winner.Rev)
 			winner = *candidate
 		} else {
