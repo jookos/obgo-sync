@@ -129,6 +129,100 @@ func TestPull_SingleFilePath(t *testing.T) {
 	}
 }
 
+// TestPull_DeletesLocalFileForLeanTombstone covers the case where Obsidian/PouchDB
+// deletes a document via HTTP DELETE, producing a lean tombstone with no path or
+// type field — only _id, _rev, and _deleted:true.
+func TestPull_DeletesLocalFileForLeanTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Create the local file that was deleted on the remote.
+	absPath := filepath.Join(tmpDir, "lean-deleted.md")
+	if err := os.WriteFile(absPath, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Lean tombstone: no Path, no Type — only ID and Deleted flag.
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: "lean-deleted.md", Deleted: true},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("expected local file to be removed after pulling lean tombstone")
+	}
+}
+
+func TestPull_DeletesLocalFileForRemoteTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	// Create a local file that was deleted on the remote.
+	absPath := filepath.Join(tmpDir, "deleted.md")
+	if err := os.WriteFile(absPath, []byte("stale content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Mock returns a tombstone doc for the file.
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:      "deleted.md",
+			Type:    "plain",
+			Path:    "deleted.md",
+			Deleted: true,
+		},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("expected local file to be removed after pulling tombstone")
+	}
+}
+
+// TestPull_DeletesLocalFileForAppLevelTombstone covers the Livesync app-level
+// deletion format: a full document with deleted:true (no underscore) that
+// preserves all metadata fields. This is what the official Obsidian Livesync
+// plugin writes — it avoids CouchDB-level tombstones so that path info survives.
+func TestPull_DeletesLocalFileForAppLevelTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	absPath := filepath.Join(tmpDir, "app-deleted.md")
+	if err := os.WriteFile(absPath, []byte("old content"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// App-level tombstone: full doc with deleted:true, no _deleted.
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:         "app-deleted.md",
+			Type:       "plain",
+			Path:       "app-deleted.md",
+			DeletedApp: true,
+		},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(absPath); !os.IsNotExist(err) {
+		t.Error("expected local file to be removed after pulling app-level tombstone")
+	}
+}
+
 func TestPull_FolderPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := newMockClient()

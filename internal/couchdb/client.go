@@ -192,6 +192,13 @@ func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 			continue
 		}
 		if row.Doc.Deleted {
+			// Lean tombstones created by Obsidian/PouchDB (HTTP DELETE) have no
+			// type field. Identify file docs by ruling out known non-file ID prefixes.
+			id := row.Doc.ID
+			if !strings.HasPrefix(id, "h:") && !strings.HasPrefix(id, "i:") &&
+				!strings.HasPrefix(id, "f:") && !strings.HasPrefix(id, "ix:") {
+				docs = append(docs, *row.Doc)
+			}
 			continue
 		}
 		if row.Doc.Type != "plain" && row.Doc.Type != "newnote" {
@@ -407,7 +414,7 @@ func (c *HTTPClient) Changes(ctx context.Context, since string) (<-chan ChangeEv
 // until the connection closes or ctx is cancelled. lastSeq is updated as events arrive.
 func (c *HTTPClient) streamChanges(ctx context.Context, since string, ch chan<- ChangeEvent, lastSeq *string) error {
 	rawURL := c.dbURL("_changes") +
-		"?feed=continuous&heartbeat=10000&include_docs=true&since=" +
+		"?feed=continuous&heartbeat=10000&include_docs=true&style=all_docs&conflicts=true&since=" +
 		url.QueryEscape(since)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

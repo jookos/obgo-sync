@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -42,7 +43,7 @@ func rootCmd() *cobra.Command {
 }
 
 func pullCmd(envFile *string) *cobra.Command {
-	var watch, watchLocal, watchRemote, silence, verbose bool
+	var watch, watchLocal, watchRemote, silence, verbose, debug bool
 
 	cmd := &cobra.Command{
 		Use:   "pull [path]",
@@ -60,7 +61,7 @@ contents.`,
 			}
 			wl := watchLocal || watch
 			wr := watchRemote || watch
-			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, true, filter)
+			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, debug, true, filter)
 		},
 	}
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "watch for both local and remote changes after pull")
@@ -68,11 +69,12 @@ contents.`,
 	cmd.Flags().BoolVar(&watchRemote, "wr", false, "watch for remote changes and pull them after pull")
 	cmd.Flags().BoolVarP(&silence, "silence", "s", false, "suppress progress output")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "log each file synced during watch")
+	cmd.Flags().BoolVarP(&debug, "debug", "d", false, "log every raw CouchDB change event (implies -v)")
 	return cmd
 }
 
 func pushCmd(envFile *string) *cobra.Command {
-	var watch, watchLocal, watchRemote, silence, verbose bool
+	var watch, watchLocal, watchRemote, silence, verbose, debug bool
 
 	cmd := &cobra.Command{
 		Use:   "push [path]",
@@ -90,7 +92,7 @@ its contents.`,
 			}
 			wl := watchLocal || watch
 			wr := watchRemote || watch
-			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, false, filter)
+			return run(cmd.Context(), *envFile, wl, wr, silence, verbose, debug, false, filter)
 		},
 	}
 	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "watch for both local and remote changes after push")
@@ -98,6 +100,7 @@ its contents.`,
 	cmd.Flags().BoolVar(&watchRemote, "wr", false, "watch for remote changes and pull them after push")
 	cmd.Flags().BoolVarP(&silence, "silence", "s", false, "suppress progress output")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "log each file synced during watch")
+	cmd.Flags().BoolVarP(&debug, "debug", "d", false, "log every raw CouchDB change event (implies -v)")
 	return cmd
 }
 
@@ -172,7 +175,7 @@ func hostFromURL(rawURL string) string {
 	return u.Host
 }
 
-func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, silence, verbose, isPull bool, filter string) error {
+func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, silence, verbose, debug, isPull bool, filter string) error {
 	// Load .env file if present; ignore error if file is missing.
 	_ = godotenv.Load(envFile)
 
@@ -220,6 +223,9 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 				count = n
 				fmt.Fprintf(os.Stderr, "\rPulled %d file(s)", n)
 			}
+			svc.OnDeleteFile = func(path string) {
+				fmt.Fprintf(os.Stderr, "\n  deleted %s", path)
+			}
 			if err := svc.Pull(ctx, filter); err != nil {
 				fmt.Fprintln(os.Stderr)
 				return fmt.Errorf("pull failed: %w", err)
@@ -238,6 +244,9 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 			svc.OnPushFile = func(n int) {
 				count = n
 				fmt.Fprintf(os.Stderr, "\rPushed %d file(s)", n)
+			}
+			svc.OnTombstone = func(path string) {
+				fmt.Fprintf(os.Stderr, "\n  deleted %s (remote)", path)
 			}
 			if err := svc.Push(ctx, filter); err != nil {
 				fmt.Fprintln(os.Stderr)
@@ -263,13 +272,25 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 				fmt.Fprintf(os.Stderr, "Watching for remote changes...\n")
 			}
 		}
-		if verbose {
+		if verbose || debug {
 			svc.OnWatchEvent = func(path string, toRemote bool) {
 				if toRemote {
-					fmt.Fprintf(os.Stderr, "  → %s (to remote)\n", path)
+					fmt.Fprintf(os.Stderr, "  → %s (updated on local)\n", path)
 				} else {
-					fmt.Fprintf(os.Stderr, "  ← %s (from remote)\n", path)
+					fmt.Fprintf(os.Stderr, "  ← %s (updated on remote)\n", path)
 				}
+			}
+			svc.OnDeleteFile = func(path string) {
+				fmt.Fprintf(os.Stderr, "  ✗ %s (deleted on remote)\n", path)
+			}
+			svc.OnTombstone = func(path string) {
+				fmt.Fprintf(os.Stderr, "  ✗ %s (deleted on local)\n", path)
+			}
+		}
+		if debug {
+			svc.OnRawChangeEvent = func(event couchdb.ChangeEvent) {
+				b, _ := json.Marshal(event)
+				fmt.Fprintf(os.Stderr, "  [raw] %s\n", b)
 			}
 		}
 		if err := svc.Watch(ctx, watchLocal, watchRemote); err != nil {

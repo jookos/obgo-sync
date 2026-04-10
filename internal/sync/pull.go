@@ -88,8 +88,30 @@ func (s *Service) Pull(ctx context.Context, filter string) error {
 }
 
 // applyRemoteDoc fetches chunks for a meta doc, assembles the content and
-// writes it to the local filesystem.
+// writes it to the local filesystem. If the doc signals deletion (either a
+// CouchDB tombstone _deleted:true or a Livesync app-level deleted:true field),
+// the corresponding local file is removed instead.
 func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error {
+	// Handle remote deletions: remove the local file.
+	if doc.Deleted || doc.DeletedApp {
+		// Lean tombstones (from Obsidian/PouchDB HTTP DELETE) have no path field;
+		// fall back to decoding the document ID.
+		path := doc.Path
+		if path == "" {
+			path, _ = livesync.DecodeDocID(doc.ID)
+		}
+		if path != "" {
+			// resolveCase handles case mismatches between the lowercase doc ID
+			// and the original-cased path stored on a case-sensitive filesystem.
+			absPath := resolveCase(s.dataDir, path)
+			s.suppress.Add(absPath)
+			_ = os.Remove(absPath)
+			if s.OnDeleteFile != nil {
+				s.OnDeleteFile(path)
+			}
+		}
+		return nil
+	}
 	// Skip internal state files that should never be synced.
 	if base := filepath.Base(doc.Path); len(base) > 5 && base[:5] == ".obgo" {
 		return nil

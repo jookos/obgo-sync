@@ -25,9 +25,12 @@ type Service struct {
 	crypto       *crypto.Service
 	dataDir      string
 	suppress     *watcher.SuppressSet
-	OnPullFile   func(n int)
-	OnPushFile   func(n int)
-	OnWatchEvent func(path string, toRemote bool)
+	OnPullFile        func(n int)
+	OnPushFile        func(n int)
+	OnWatchEvent      func(path string, toRemote bool)
+	OnDeleteFile      func(path string)             // called when a local file is removed (pull or watch)
+	OnTombstone       func(path string)             // called when a remote doc is tombstoned (push or watch)
+	OnRawChangeEvent  func(event couchdb.ChangeEvent) // called for every raw _changes event (debug)
 }
 
 // New creates a new sync Service.
@@ -49,15 +52,15 @@ func (s *Service) List(ctx context.Context, prefix string) ([]couchdb.MetaDoc, e
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
-	if prefix == "" {
-		sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
-		return docs, nil
-	}
 	var result []couchdb.MetaDoc
 	for _, doc := range docs {
-		if strings.HasPrefix(doc.Path, prefix) {
-			result = append(result, doc)
+		if doc.IsDeleted() {
+			continue
 		}
+		if prefix != "" && !strings.HasPrefix(doc.Path, prefix) {
+			continue
+		}
+		result = append(result, doc)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
 	return result, nil
@@ -71,6 +74,9 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 	}
 
 	remoteOnEvent := func(ctx context.Context, event couchdb.ChangeEvent) error {
+		if s.OnRawChangeEvent != nil {
+			s.OnRawChangeEvent(event)
+		}
 		// Skip non-file documents (chunk IDs h:..., index IDs i:/f:/ix:..., etc.)
 		_, isFile := livesync.DecodeDocID(event.ID)
 		if !isFile {
@@ -90,9 +96,12 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		}
 
 		if event.Deleted {
-			absPath := filepath.Join(s.dataDir, filepath.FromSlash(path))
+			absPath := resolveCase(s.dataDir, path)
 			s.suppress.Add(absPath)
 			_ = os.Remove(absPath)
+			if s.OnDeleteFile != nil {
+				s.OnDeleteFile(path)
+			}
 			return nil
 		}
 		if event.Doc != nil {
@@ -135,9 +144,15 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		if err != nil {
 			return // not in CouchDB, nothing to do
 		}
-		existing.Deleted = true
+		existing.Deleted = false
+		existing.DeletedApp = true
+		existing.Children = nil
 		if _, err := s.db.PutMeta(ctx, existing); err != nil {
 			fmt.Fprintf(os.Stderr, "watch: delete %q: %v\n", relPath, err)
+			return
+		}
+		if s.OnTombstone != nil {
+			s.OnTombstone(relPath)
 		}
 	}
 
