@@ -163,8 +163,11 @@ func TestPush_TombstonesRemoteDocForMissingLocalFile(t *testing.T) {
 	if len(db.putMetaDocs) != 1 {
 		t.Fatalf("expected 1 PutMeta (tombstone) call, got %d", len(db.putMetaDocs))
 	}
-	if !db.putMetaDocs[0].Deleted {
-		t.Error("expected remote doc to be tombstoned (Deleted: true)")
+	if !db.putMetaDocs[0].DeletedApp {
+		t.Error("expected remote doc to carry app-level deletion marker (deleted: true)")
+	}
+	if db.putMetaDocs[0].Deleted {
+		t.Error("tombstone must not use CouchDB _deleted — path info would be lost")
 	}
 	if db.putMetaDocs[0].Path != "gone.md" {
 		t.Errorf("tombstoned wrong doc: got %q, want %q", db.putMetaDocs[0].Path, "gone.md")
@@ -189,8 +192,11 @@ func TestPush_SingleFileTombstonesWhenMissing(t *testing.T) {
 	if len(db.putMetaDocs) != 1 {
 		t.Fatalf("expected 1 PutMeta (tombstone) call, got %d", len(db.putMetaDocs))
 	}
-	if !db.putMetaDocs[0].Deleted {
-		t.Error("expected remote doc to be tombstoned (Deleted: true)")
+	if !db.putMetaDocs[0].DeletedApp {
+		t.Error("expected remote doc to carry app-level deletion marker (deleted: true)")
+	}
+	if db.putMetaDocs[0].Deleted {
+		t.Error("tombstone must not use CouchDB _deleted — path info would be lost")
 	}
 }
 

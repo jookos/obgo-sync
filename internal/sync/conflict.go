@@ -36,11 +36,11 @@ func (s *Service) resolveConflicts(ctx context.Context, doc couchdb.MetaDoc) (co
 		// DELETE response body has no fields beyond _id/_rev/_deleted. Treat them
 		// as "deleted just now" so a fresh deletion beats an older content revision.
 		candidateMTime := candidate.MTime
-		if candidate.Deleted && candidateMTime == 0 {
+		if candidate.IsDeleted() && candidateMTime == 0 {
 			candidateMTime = time.Now().UnixMilli()
 		}
 		winnerMTime := winner.MTime
-		if winner.Deleted && winnerMTime == 0 {
+		if winner.IsDeleted() && winnerMTime == 0 {
 			winnerMTime = time.Now().UnixMilli()
 		}
 		if candidateMTime > winnerMTime {

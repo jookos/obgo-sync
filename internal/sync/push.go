@@ -34,8 +34,10 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 			// File missing locally: tombstone the remote doc if it exists.
 			docID := livesync.EncodeDocID(filter)
 			existing, gerr := s.db.GetMeta(ctx, docID)
-			if gerr == nil && !existing.Deleted {
-				existing.Deleted = true
+			if gerr == nil && !existing.IsDeleted() {
+				existing.Deleted = false
+				existing.DeletedApp = true
+				existing.Children = nil
 				if _, perr := s.db.PutMeta(ctx, existing); perr != nil {
 					return fmt.Errorf("push: tombstone %q: %w", filter, perr)
 				}
@@ -92,7 +94,7 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		return fmt.Errorf("push: list remote for reconcile: %w", err)
 	}
 	for _, remote := range remoteDocs {
-		if remote.Deleted {
+		if remote.IsDeleted() {
 			continue // already tombstoned
 		}
 		// Only reconcile paths inside the walked scope.
@@ -102,7 +104,9 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		if _, ok := pushedPaths[remote.Path]; ok {
 			continue // was just pushed — still exists
 		}
-		remote.Deleted = true
+		remote.Deleted = false
+		remote.DeletedApp = true
+		remote.Children = nil
 		if _, err := s.db.PutMeta(ctx, &remote); err != nil {
 			fmt.Fprintf(os.Stderr, "push: tombstone %q: %v\n", remote.Path, err)
 			continue

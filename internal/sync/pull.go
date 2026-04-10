@@ -88,11 +88,12 @@ func (s *Service) Pull(ctx context.Context, filter string) error {
 }
 
 // applyRemoteDoc fetches chunks for a meta doc, assembles the content and
-// writes it to the local filesystem. If the doc is a tombstone (_deleted:true),
+// writes it to the local filesystem. If the doc signals deletion (either a
+// CouchDB tombstone _deleted:true or a Livesync app-level deleted:true field),
 // the corresponding local file is removed instead.
 func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error {
 	// Handle remote deletions: remove the local file.
-	if doc.Deleted {
+	if doc.Deleted || doc.DeletedApp {
 		// Lean tombstones (from Obsidian/PouchDB HTTP DELETE) have no path field;
 		// fall back to decoding the document ID.
 		path := doc.Path

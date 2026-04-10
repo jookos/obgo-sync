@@ -54,7 +54,7 @@ func (s *Service) List(ctx context.Context, prefix string) ([]couchdb.MetaDoc, e
 	}
 	var result []couchdb.MetaDoc
 	for _, doc := range docs {
-		if doc.Deleted {
+		if doc.IsDeleted() {
 			continue
 		}
 		if prefix != "" && !strings.HasPrefix(doc.Path, prefix) {
@@ -144,7 +144,9 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		if err != nil {
 			return // not in CouchDB, nothing to do
 		}
-		existing.Deleted = true
+		existing.Deleted = false
+		existing.DeletedApp = true
+		existing.Children = nil
 		if _, err := s.db.PutMeta(ctx, existing); err != nil {
 			fmt.Fprintf(os.Stderr, "watch: delete %q: %v\n", relPath, err)
 			return
