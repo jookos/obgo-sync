@@ -26,6 +26,9 @@ type LocalWatcher struct {
 	onRemove       func(path string)
 	debounceDur    time.Duration
 	pendingRemoves map[string]*time.Timer
+	// removeFired receives paths from expired debounce timers. All map access
+	// stays in the Run goroutine; timer goroutines only do a channel send.
+	removeFired chan string
 }
 
 // NewLocalWatcher creates a new LocalWatcher.
@@ -37,6 +40,7 @@ func NewLocalWatcher(dir string, suppress *SuppressSet, onChange func(string, fs
 		onRemove:       onRemove,
 		debounceDur:    defaultDebounceDur,
 		pendingRemoves: make(map[string]*time.Timer),
+		removeFired:    make(chan string, 32),
 	}
 	for _, o := range opts {
 		o(w)
@@ -67,6 +71,11 @@ func (w *LocalWatcher) Run(ctx context.Context) error {
 				return nil
 			}
 			w.handleEvent(fw, event)
+		case path := <-w.removeFired:
+			delete(w.pendingRemoves, path)
+			if w.onRemove != nil && !w.suppress.IsSuppressed(path) {
+				w.onRemove(path)
+			}
 		case err, ok := <-fw.Errors:
 			if !ok {
 				return nil
@@ -123,9 +132,9 @@ func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
 		}
 		path := event.Name
 		w.pendingRemoves[path] = time.AfterFunc(w.debounceDur, func() {
-			delete(w.pendingRemoves, path)
-			if w.onRemove != nil && !w.suppress.IsSuppressed(path) {
-				w.onRemove(path)
+			select {
+			case w.removeFired <- path:
+			default:
 			}
 		})
 	}
