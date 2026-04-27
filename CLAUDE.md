@@ -65,6 +65,8 @@ The binary layout of each encrypted chunk data field is `[IV(12)][HKDF_salt(32)]
 
 **Loop prevention in watch mode**: `watcher.SuppressSet` tracks absolute paths the app just wrote to disk. `LocalWatcher` drops fsnotify events for any suppressed path (2 s TTL, lazy eviction). This prevents the pull→write→fsnotify→push→pull cycle.
 
+**Debounced deletes**: `LocalWatcher` does not call `onRemove` immediately on `Remove`/`Rename` events. Instead it starts a per-path 500ms timer. If a `Create` or `Write` for the same path arrives before the timer fires (as happens during atomic-save in Vim/Neovim), the timer is cancelled and the event is treated as an update. This prevents editors that rename→write from accidentally tombstoning files on the remote.
+
 **Watch mode** (`--watch`): after the initial pull/push, `sync.Service.Watch` starts two goroutines — `RemoteWatcher` streams `_changes?feed=continuous` and calls `applyRemoteDoc`; `LocalWatcher` uses fsnotify and calls `pushFile`. The last CouchDB seq is persisted to `.obgo_seq` inside `OBGO_DATA` for restart resume.
 
 ### Integration tests
