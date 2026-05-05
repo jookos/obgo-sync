@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -196,6 +198,95 @@ func (s *Service) decryptV1(b64 string) ([]byte, error) {
 	nonce := data[:12]
 	encrypted := data[12:]
 	return aesGCMDecrypt(key, nonce, encrypted)
+}
+
+// Password returns the raw passphrase configured for this service.
+// It is used by callers that need the passphrase for non-AES operations
+// such as computing obfuscated document IDs.
+func (s *Service) Password() string { return s.password }
+
+// ObfuscateDocID computes the f:-prefixed CouchDB document ID used when path
+// obfuscation is enabled in Obsidian Livesync.
+// Algorithm (from livesync-commonlib/src/string_and_binary/path.ts):
+//
+//	passHash = hex(SHA-256(passphrase))
+//	docID    = "f:" + hex(SHA-256(passHash + ":" + lowercase(path)))
+func (s *Service) ObfuscateDocID(path string) string {
+	path = strings.ToLower(path)
+	passHash := hexSHA256(s.password)
+	return "f:" + hexSHA256(passHash+":"+path)
+}
+
+// PathBlob is the plaintext structure stored inside an obfuscated path field.
+// Obsidian Livesync encodes all file metadata here when "Obfuscate Properties" is on;
+// the outer MetaDoc fields (children, mtime, ctime, size) may be empty.
+type PathBlob struct {
+	Path     string   `json:"path"`
+	MTime    int64    `json:"mtime"`
+	CTime    int64    `json:"ctime"`
+	Size     int64    `json:"size"`
+	Children []string `json:"children"`
+}
+
+// DecryptPathBlob decrypts an obfuscated path field and returns all embedded metadata.
+// The field starts with "/\:" followed by an E2EE-encrypted JSON blob.
+// Returns nil, nil if the path does not carry the "/\:" prefix (not obfuscated).
+func (s *Service) DecryptPathBlob(obfuscatedPath string) (*PathBlob, error) {
+	const prefix = "/\\:"
+	if !strings.HasPrefix(obfuscatedPath, prefix) {
+		return nil, nil
+	}
+	if !s.Enabled() {
+		return nil, errors.New("crypto: path obfuscation detected but E2EE_PASSWORD is not configured")
+	}
+	plainJSON, err := s.DecryptContent(obfuscatedPath[len(prefix):])
+	if err != nil {
+		return nil, fmt.Errorf("crypto: decrypt path blob: %w", err)
+	}
+	var blob PathBlob
+	if err := json.Unmarshal(plainJSON, &blob); err != nil {
+		return nil, fmt.Errorf("crypto: parse path blob JSON: %w", err)
+	}
+	if blob.Path == "" {
+		return nil, errors.New("crypto: decrypted path blob has empty path field")
+	}
+	return &blob, nil
+}
+
+// DecryptPath decrypts an obfuscated path field and returns the plaintext file path.
+// If the value does not carry the "/\:" prefix it is returned unchanged (no-op).
+func (s *Service) DecryptPath(obfuscatedPath string) (string, error) {
+	blob, err := s.DecryptPathBlob(obfuscatedPath)
+	if err != nil {
+		return "", err
+	}
+	if blob == nil {
+		return obfuscatedPath, nil // not obfuscated
+	}
+	return blob.Path, nil
+}
+
+// EncryptPath encrypts a vault-relative path and its metadata into the "/\:"-prefixed
+// blob format expected by Obsidian Livesync when path obfuscation is enabled.
+func (s *Service) EncryptPath(path string, ctime, mtime, size int64, children []string) (string, error) {
+	blob, err := json.Marshal(map[string]interface{}{
+		"path": path, "ctime": ctime, "mtime": mtime,
+		"size": size, "children": children,
+	})
+	if err != nil {
+		return "", fmt.Errorf("crypto: marshal path blob: %w", err)
+	}
+	encrypted, err := s.EncryptContent(blob)
+	if err != nil {
+		return "", fmt.Errorf("crypto: encrypt path blob: %w", err)
+	}
+	return "/\\:" + encrypted, nil
+}
+
+// hexSHA256 returns the lowercase hex-encoded SHA-256 digest of s.
+func hexSHA256(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 // aesGCMDecrypt decrypts data with AES-256-GCM.

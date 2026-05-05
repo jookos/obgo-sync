@@ -124,17 +124,48 @@ func TestEncodeDocID_SpecialChars(t *testing.T) {
 // --- DecodeDocID tests ---
 
 func TestDecodeDocID_NonFileIDs(t *testing.T) {
+	// h: (chunks), i: (internal), ix: (internal index) are non-file documents.
+	// f: (obfuscated file meta-docs) are deliberately excluded — they ARE file docs.
 	nonFileCases := []string{
 		"h:abc123",
 		"h:+deadbeef",
 		"i:someindex",
-		"f:someflag",
 		"ix:someindex",
 	}
 	for _, id := range nonFileCases {
 		path, isFile := DecodeDocID(id)
 		if isFile {
 			t.Errorf("DecodeDocID(%q): expected isFile=false, got true (path=%q)", id, path)
+		}
+	}
+}
+
+func TestDecodeDocID_ObfuscatedFileID(t *testing.T) {
+	// f: docs are obfuscated file meta-docs — they are treated as files by DecodeDocID.
+	path, isFile := DecodeDocID("f:abc123sha256hash")
+	if !isFile {
+		t.Error("DecodeDocID(f:...): expected isFile=true for obfuscated file doc")
+	}
+	if path != "f:abc123sha256hash" {
+		t.Errorf("DecodeDocID(f:...): got path=%q, want %q", path, "f:abc123sha256hash")
+	}
+}
+
+func TestIsObfuscatedDocID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"f:abc123", true},
+		{"f:", true},
+		{"h:abc", false},
+		{"notes/foo.md", false},
+		{"i:config", false},
+		{"ix:index", false},
+	}
+	for _, tc := range cases {
+		if got := IsObfuscatedDocID(tc.id); got != tc.want {
+			t.Errorf("IsObfuscatedDocID(%q) = %v, want %v", tc.id, got, tc.want)
 		}
 	}
 }

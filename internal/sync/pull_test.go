@@ -2,8 +2,10 @@ package sync_test
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jookos/obgo-sync/internal/couchdb"
@@ -250,5 +252,133 @@ func TestPull_FolderPath(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmpDir, "projects", "x.md")); !os.IsNotExist(err) {
 		t.Error("projects/x.md should not have been pulled")
+	}
+}
+
+// TestPull_ObfuscatedPath verifies that a MetaDoc with an f:-prefixed ID and an
+// encrypted "/\:..." path field is correctly decrypted and written to disk.
+func TestPull_ObfuscatedPath(t *testing.T) {
+	const password = "test-obfuscate-pass"
+	const saltStr = "test-pull-salt-32-bytes-padding!"
+
+	cr := crypto.New(password)
+	cr.SetSalt([]byte(saltStr))
+
+	// Build an encrypted path blob identical to what Obsidian Livesync produces.
+	realPath := "notes/secret.md"
+	encPath, err := cr.EncryptPath(realPath, 1000, 2000, 7, []string{"h:+chunkA"})
+	if err != nil {
+		t.Fatalf("EncryptPath: %v", err)
+	}
+	if !strings.HasPrefix(encPath, "/\\:") {
+		t.Fatalf("encrypted path should start with /\\:, got %q", encPath[:10])
+	}
+
+	// Build an encrypted chunk doc.
+	chunkData, err := cr.EncryptContent([]byte("content!"))
+	if err != nil {
+		t.Fatalf("EncryptContent: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	// Seed the sync-parameters local doc so loadSalt can find the salt.
+	db.localDocs["obsidian_livesync_sync_parameters"] = map[string]interface{}{
+		"pbkdf2salt": base64.StdEncoding.EncodeToString([]byte(saltStr)),
+	}
+
+	chunkID := "h:+chunkA"
+	db.chunkDocs[chunkID] = couchdb.ChunkDoc{ID: chunkID, Data: chunkData, Type: "leaf", Encrypted: true}
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:        cr.ObfuscateDocID(realPath),
+			Type:      "plain",
+			Path:      encPath,
+			Children:  []string{chunkID},
+			Encrypted: true,
+		},
+	}
+
+	svc := syncsvc.New(db, cr, tmpDir)
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull with obfuscated path: %v", err)
+	}
+
+	// The file should appear at the decrypted path on disk.
+	absPath := filepath.Join(tmpDir, filepath.FromSlash(realPath))
+	got, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("ReadFile %q: %v", absPath, err)
+	}
+	if string(got) != "content!" {
+		t.Errorf("file content mismatch: got %q, want %q", got, "content!")
+	}
+}
+
+// TestPull_ObfuscatedPath_ChildrenInBlob mirrors the real Obsidian Livesync behaviour
+// where Children on the outer MetaDoc is empty and chunk IDs are only in the encrypted blob.
+func TestPull_ObfuscatedPath_ChildrenInBlob(t *testing.T) {
+	const password = "test-obfuscate-pass"
+	const saltStr = "test-pull-salt-32-bytes-padding!"
+
+	cr := crypto.New(password)
+	cr.SetSalt([]byte(saltStr))
+
+	realPath := "notes/secret.md"
+	chunkID := "h:+chunkA"
+	// Encrypt path blob that includes children — outer MetaDoc children will be empty.
+	encPath, err := cr.EncryptPath(realPath, 1000, 2000, 8, []string{chunkID})
+	if err != nil {
+		t.Fatalf("EncryptPath: %v", err)
+	}
+
+	chunkData, err := cr.EncryptContent([]byte("content!"))
+	if err != nil {
+		t.Fatalf("EncryptContent: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	db.localDocs["obsidian_livesync_sync_parameters"] = map[string]interface{}{
+		"pbkdf2salt": base64.StdEncoding.EncodeToString([]byte(saltStr)),
+	}
+	db.chunkDocs[chunkID] = couchdb.ChunkDoc{ID: chunkID, Data: chunkData, Type: "leaf", Encrypted: true}
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:        cr.ObfuscateDocID(realPath),
+			Type:      "plain",
+			Path:      encPath,
+			Children:  nil, // intentionally empty — only in the encrypted blob
+			Encrypted: true,
+		},
+	}
+
+	svc := syncsvc.New(db, cr, tmpDir)
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull with children-in-blob: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmpDir, filepath.FromSlash(realPath)))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "content!" {
+		t.Errorf("file content: got %q, want %q", got, "content!")
+	}
+}
+
+// TestPull_ObfuscatedTombstone verifies that a lean tombstone with an f: ID
+// (which cannot be resolved to a path) is silently skipped without error.
+func TestPull_ObfuscatedTombstone(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	// A lean tombstone: only _id, _deleted — no path, no type.
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: "f:deadbeef0123456789abcdef", Deleted: true},
+	}
+	svc := syncsvc.New(db, cr, tmpDir)
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull with obfuscated tombstone should not error: %v", err)
 	}
 }

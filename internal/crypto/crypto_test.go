@@ -131,3 +131,83 @@ func TestEncrypt_DifferentNonce(t *testing.T) {
 		t.Error("two encryptions of same plaintext should differ due to random nonce")
 	}
 }
+
+func TestDecryptPath_PlainPath(t *testing.T) {
+	svc := New("password")
+	svc.SetSalt([]byte("some-salt-32-bytes-padding-here!"))
+	plain := "notes/hello.md"
+	got, err := svc.DecryptPath(plain)
+	if err != nil {
+		t.Fatalf("DecryptPath on plain path: %v", err)
+	}
+	if got != plain {
+		t.Errorf("DecryptPath on plain path: got %q, want %q", got, plain)
+	}
+}
+
+func TestDecryptPath_Roundtrip(t *testing.T) {
+	svc := New("mypassword")
+	svc.SetSalt([]byte("roundtrip-salt-32-bytes-padded!!"))
+
+	path := "notes/my secret note.md"
+	encrypted, err := svc.EncryptPath(path, 1000, 2000, 512, []string{"h:abc"})
+	if err != nil {
+		t.Fatalf("EncryptPath: %v", err)
+	}
+
+	if !strings.HasPrefix(encrypted, "/\\:") {
+		t.Errorf("EncryptPath should return /\\: prefix, got %q", encrypted[:min(len(encrypted), 10)])
+	}
+
+	decrypted, err := svc.DecryptPath(encrypted)
+	if err != nil {
+		t.Fatalf("DecryptPath: %v", err)
+	}
+	if decrypted != path {
+		t.Errorf("DecryptPath roundtrip: got %q, want %q", decrypted, path)
+	}
+}
+
+func TestDecryptPath_NoE2EE(t *testing.T) {
+	svc := New("") // E2EE disabled
+	obfuscated := "/\\:%=someciphertext"
+	_, err := svc.DecryptPath(obfuscated)
+	if err == nil {
+		t.Error("DecryptPath with obfuscated path but no E2EE should return error")
+	}
+}
+
+func TestObfuscateDocID_Deterministic(t *testing.T) {
+	svc := New("mypassphrase")
+	id1 := svc.ObfuscateDocID("notes/hello.md")
+	id2 := svc.ObfuscateDocID("notes/hello.md")
+	if id1 != id2 {
+		t.Errorf("ObfuscateDocID should be deterministic: %q != %q", id1, id2)
+	}
+}
+
+func TestObfuscateDocID_Prefix(t *testing.T) {
+	svc := New("pass")
+	id := svc.ObfuscateDocID("notes/foo.md")
+	if !strings.HasPrefix(id, "f:") {
+		t.Errorf("ObfuscateDocID should return f: prefix, got %q", id)
+	}
+}
+
+func TestObfuscateDocID_CaseInsensitive(t *testing.T) {
+	svc := New("pass")
+	id1 := svc.ObfuscateDocID("Notes/Foo.md")
+	id2 := svc.ObfuscateDocID("notes/foo.md")
+	if id1 != id2 {
+		t.Errorf("ObfuscateDocID should be case-insensitive: %q != %q", id1, id2)
+	}
+}
+
+func TestObfuscateDocID_DifferentPaths(t *testing.T) {
+	svc := New("pass")
+	id1 := svc.ObfuscateDocID("notes/a.md")
+	id2 := svc.ObfuscateDocID("notes/b.md")
+	if id1 == id2 {
+		t.Error("different paths should produce different obfuscated IDs")
+	}
+}

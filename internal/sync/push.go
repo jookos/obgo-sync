@@ -27,12 +27,20 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		}
 	}
 
-	// 2. Single-file shortcut.
+	// 2. Pre-load remote docs to detect obfuscation mode and to reuse for reconcile.
+	remoteDocs, err := s.db.AllMetaDocs(ctx)
+	if err != nil {
+		return fmt.Errorf("push: list remote: %w", err)
+	}
+	s.detectObfuscation(remoteDocs)
+	s.decryptDocPaths(remoteDocs)
+
+	// 3. Single-file shortcut.
 	if filter != "" && !strings.HasSuffix(filter, "/") {
 		absPath := filepath.Join(s.dataDir, filepath.FromSlash(filter))
 		if _, err := os.Stat(absPath); err != nil {
 			// File missing locally: tombstone the remote doc if it exists.
-			docID := livesync.EncodeDocID(filter)
+			docID := s.encodeDocID(filter)
 			existing, gerr := s.db.GetMeta(ctx, docID)
 			if gerr == nil && !existing.IsDeleted() {
 				existing.Deleted = false
@@ -56,7 +64,7 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		return nil
 	}
 
-	// 3. Walk a directory (whole vault or a folder prefix).
+	// 4. Walk a directory (whole vault or a folder prefix).
 	walkRoot := s.dataDir
 	if filter != "" {
 		walkRoot = filepath.Join(s.dataDir, filepath.FromSlash(filter))
@@ -88,11 +96,8 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		return err
 	}
 
-	// 4. Reconcile: tombstone remote docs that no longer exist locally.
-	remoteDocs, err := s.db.AllMetaDocs(ctx)
-	if err != nil {
-		return fmt.Errorf("push: list remote for reconcile: %w", err)
-	}
+	// 5. Reconcile: tombstone remote docs that no longer exist locally.
+	// remoteDocs was already loaded and paths decrypted in step 2.
 	for _, remote := range remoteDocs {
 		if remote.IsDeleted() {
 			continue // already tombstoned
@@ -116,6 +121,15 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		}
 	}
 	return nil
+}
+
+// encodeDocID returns the CouchDB document ID for the given vault-relative path,
+// using an obfuscated (f: prefixed) ID when path obfuscation is active.
+func (s *Service) encodeDocID(relPath string) string {
+	if s.obfuscated {
+		return s.crypto.ObfuscateDocID(relPath)
+	}
+	return livesync.EncodeDocID(relPath)
 }
 
 // ensureSalt loads the HKDF salt from CouchDB or generates and stores a new one.
@@ -244,7 +258,7 @@ func (s *Service) pushFile(ctx context.Context, absPath string) error {
 	mtime := info.ModTime().UnixMilli()
 
 	// Fetch existing doc for rev and original ctime.
-	docID := livesync.EncodeDocID(relPath)
+	docID := s.encodeDocID(relPath)
 	existing, err := s.db.GetMeta(ctx, docID)
 	var rev string
 	var ctime int64 = mtime
@@ -257,11 +271,20 @@ func (s *Service) pushFile(ctx context.Context, absPath string) error {
 		return fmt.Errorf("get existing meta for %q: %w", relPath, err)
 	}
 
+	// Build path field: encrypted blob for obfuscated vaults, plain path otherwise.
+	pathField := relPath
+	if s.obfuscated {
+		pathField, err = s.crypto.EncryptPath(relPath, ctime, mtime, info.Size(), chunkIDs)
+		if err != nil {
+			return fmt.Errorf("encrypt path for %q: %w", relPath, err)
+		}
+	}
+
 	meta := &couchdb.MetaDoc{
 		ID:        docID,
 		Rev:       rev,
 		Type:      docType,
-		Path:      relPath,
+		Path:      pathField,
 		CTime:     ctime,
 		MTime:     mtime,
 		Size:      info.Size(),

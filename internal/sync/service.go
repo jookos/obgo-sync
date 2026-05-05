@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -21,25 +22,105 @@ var ErrNotImplemented = errors.New("not implemented")
 
 // Service orchestrates pull, push, and watch operations.
 type Service struct {
-	db           couchdb.Client
-	crypto       *crypto.Service
-	dataDir      string
-	suppress     *watcher.SuppressSet
-	OnPullFile        func(n int)
-	OnPushFile        func(n int)
-	OnWatchEvent      func(path string, toRemote bool)
-	OnDeleteFile      func(path string)             // called when a local file is removed (pull or watch)
-	OnTombstone       func(path string)             // called when a remote doc is tombstoned (push or watch)
-	OnRawChangeEvent  func(event couchdb.ChangeEvent) // called for every raw _changes event (debug)
+	db              couchdb.Client
+	crypto          *crypto.Service
+	dataDir         string
+	suppress        *watcher.SuppressSet
+	obfuscated      bool   // true when the remote vault uses path obfuscation
+	obfuscationMode string // "auto" | "on" | "off"; set by SetObfuscationMode
+	OnPullFile       func(n int)
+	OnPushFile       func(n int)
+	OnWatchEvent     func(path string, toRemote bool)
+	OnDeleteFile     func(path string)
+	OnTombstone      func(path string)
+	OnRawChangeEvent func(event couchdb.ChangeEvent)
 }
 
 // New creates a new sync Service.
 func New(db couchdb.Client, cr *crypto.Service, dataDir string) *Service {
 	return &Service{
-		db:       db,
-		crypto:   cr,
-		dataDir:  dataDir,
-		suppress: watcher.NewSuppressSet(),
+		db:              db,
+		crypto:          cr,
+		dataDir:         dataDir,
+		suppress:        watcher.NewSuppressSet(),
+		obfuscationMode: "auto",
+	}
+}
+
+// SetObfuscationMode sets the path-obfuscation mode ("auto", "on", or "off").
+// "on" immediately marks the vault as obfuscated. "off" disables auto-detection.
+func (s *Service) SetObfuscationMode(mode string) {
+	s.obfuscationMode = mode
+	if mode == "on" {
+		s.obfuscated = true
+	}
+}
+
+// loadSalt fetches the PBKDF2 salt from _local/obsidian_livesync_sync_parameters
+// and configures the crypto service. No-op if E2EE is disabled.
+func (s *Service) loadSalt(ctx context.Context) error {
+	if !s.crypto.Enabled() {
+		return nil
+	}
+	params, err := s.db.GetLocal(ctx, "obsidian_livesync_sync_parameters")
+	if err != nil {
+		if errors.Is(err, couchdb.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("loadSalt: %w", err)
+	}
+	if saltB64, ok := params["pbkdf2salt"].(string); ok {
+		saltBytes, err := base64.StdEncoding.DecodeString(saltB64)
+		if err == nil {
+			s.crypto.SetSalt(saltBytes)
+		}
+	}
+	return nil
+}
+
+// detectObfuscation sets s.obfuscated if any doc in docs has an f: prefixed ID,
+// but only when obfuscationMode is "auto".
+func (s *Service) detectObfuscation(docs []couchdb.MetaDoc) {
+	if s.obfuscationMode != "auto" {
+		return
+	}
+	for _, doc := range docs {
+		if livesync.IsObfuscatedDocID(doc.ID) {
+			s.obfuscated = true
+			return
+		}
+	}
+}
+
+// decryptDocPaths decrypts the Path field of each MetaDoc whose path is obfuscated
+// (starts with "/\:") and updates all metadata fields from the encrypted blob.
+// When "Obfuscate Properties" is on, Obsidian Livesync stores path, children, mtime,
+// ctime, and size inside the encrypted blob; the outer doc fields may be empty/zero.
+// Errors are silently skipped; the encrypted value is left as-is so the caller can
+// decide how to handle it.
+func (s *Service) decryptDocPaths(docs []couchdb.MetaDoc) {
+	for i := range docs {
+		if !strings.HasPrefix(docs[i].Path, "/\\:") {
+			continue
+		}
+		blob, err := s.crypto.DecryptPathBlob(docs[i].Path)
+		if err != nil || blob == nil {
+			continue
+		}
+		docs[i].Path = blob.Path
+		// Restore metadata that Obsidian moved into the encrypted blob.
+		if len(blob.Children) > 0 {
+			docs[i].Children = blob.Children
+		}
+		if blob.MTime > 0 {
+			docs[i].MTime = blob.MTime
+		}
+		if blob.CTime > 0 {
+			docs[i].CTime = blob.CTime
+		}
+		if blob.Size > 0 {
+			docs[i].Size = blob.Size
+		}
 	}
 }
 
@@ -48,10 +129,14 @@ func New(db couchdb.Client, cr *crypto.Service, dataDir string) *Service {
 // with "/" returns documents inside that folder; a bare filename returns only
 // that file (exact path match). Results are sorted by path.
 func (s *Service) List(ctx context.Context, prefix string) ([]couchdb.MetaDoc, error) {
+	if err := s.loadSalt(ctx); err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
 	docs, err := s.db.AllMetaDocs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
+	s.decryptDocPaths(docs)
 	var result []couchdb.MetaDoc
 	for _, doc := range docs {
 		if doc.IsDeleted() {
@@ -77,21 +162,49 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		if s.OnRawChangeEvent != nil {
 			s.OnRawChangeEvent(event)
 		}
-		// Skip non-file documents (chunk IDs h:..., index IDs i:/f:/ix:..., etc.)
+		// Skip true non-file documents (chunks h:..., internal i:..., ix:...).
+		// f: docs are obfuscated file meta-docs and must NOT be skipped here.
 		_, isFile := livesync.DecodeDocID(event.ID)
 		if !isFile {
 			return nil
 		}
 
-		// Resolve the path: prefer the doc body field, fall back to decoding the event ID.
+		// Resolve path: prefer the doc body field, decrypt if obfuscated.
+		// Also restore Children and other metadata from the encrypted blob —
+		// Obsidian Livesync stores chunk IDs inside the blob when obfuscation is on.
 		path := ""
 		if event.Doc != nil {
 			path = event.Doc.Path
 		}
+		if strings.HasPrefix(path, "/\\:") {
+			blob, err := s.crypto.DecryptPathBlob(path)
+			if err != nil {
+				return fmt.Errorf("watch: decrypt path for %q: %w", event.ID, err)
+			}
+			if blob != nil {
+				path = blob.Path
+				if event.Doc != nil {
+					if len(blob.Children) > 0 {
+						event.Doc.Children = blob.Children
+					}
+					if blob.MTime > 0 {
+						event.Doc.MTime = blob.MTime
+					}
+					if blob.CTime > 0 {
+						event.Doc.CTime = blob.CTime
+					}
+					if blob.Size > 0 {
+						event.Doc.Size = blob.Size
+					}
+				}
+			}
+		}
+		// Fallback to decoding the doc ID (only useful for plain IDs, not f: hashes).
 		if path == "" {
 			path, _ = livesync.DecodeDocID(event.ID)
 		}
-		if path == "" {
+		// Skip if path could not be resolved (e.g. lean tombstone for an obfuscated doc).
+		if path == "" || livesync.IsObfuscatedDocID(path) {
 			return nil
 		}
 

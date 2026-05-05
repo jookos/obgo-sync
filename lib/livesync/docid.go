@@ -3,7 +3,15 @@ package livesync
 import "strings"
 
 // nonFileIDPrefixes lists the prefixes used for non-file documents in CouchDB.
-var nonFileIDPrefixes = []string{"h:", "i:", "f:", "ix:"}
+// Note: "f:" is intentionally absent — obfuscated file meta-docs use that prefix
+// and are valid file documents; their path is stored in the encrypted path field.
+var nonFileIDPrefixes = []string{"h:", "i:", "ix:"}
+
+// IsObfuscatedDocID reports whether id is an obfuscated file meta-doc ID (f: prefix).
+// These documents contain vault files whose paths are encrypted in the path field.
+func IsObfuscatedDocID(id string) bool {
+	return strings.HasPrefix(id, "f:")
+}
 
 // EncodeDocID converts a vault-relative file path to a CouchDB document ID.
 // The ID is always lowercased so obgo uses the same document as Obsidian,
