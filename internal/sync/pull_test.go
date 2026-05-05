@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"os"
@@ -380,5 +381,56 @@ func TestPull_ObfuscatedTombstone(t *testing.T) {
 	svc := syncsvc.New(db, cr, tmpDir)
 	if err := svc.Pull(context.Background(), ""); err != nil {
 		t.Fatalf("Pull with obfuscated tombstone should not error: %v", err)
+	}
+}
+
+// TestPull_EncryptedBinary verifies that a binary file (type: newnote) in an
+// encrypted vault is correctly decrypted and then base64-decoded before being
+// written to disk. This fixes a bug where binary files were left as base64
+// strings on disk.
+func TestPull_EncryptedBinary(t *testing.T) {
+	const password = "test-pass"
+	const saltStr = "test-salt-32-bytes-padding!!!!!!"
+	cr := crypto.New(password)
+	cr.SetSalt([]byte(saltStr))
+
+	rawBytes := []byte{0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE}
+	base64Encoded := base64.StdEncoding.EncodeToString(rawBytes)
+	
+	// Encrypt the base64 string, as Livesync does for binary chunks.
+	encryptedChunk, err := cr.EncryptContent([]byte(base64Encoded))
+	if err != nil {
+		t.Fatalf("EncryptContent: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	db.localDocs["obsidian_livesync_sync_parameters"] = map[string]interface{}{
+		"pbkdf2salt": base64.StdEncoding.EncodeToString([]byte(saltStr)),
+	}
+
+	chunkID := "h:+chunkB"
+	db.chunkDocs[chunkID] = couchdb.ChunkDoc{ID: chunkID, Data: encryptedChunk, Type: "leaf", Encrypted: true}
+	db.metaDocs = []couchdb.MetaDoc{
+		{
+			ID:       "binary.png",
+			Type:     "newnote", // Binary file
+			Path:     "binary.png",
+			Children: []string{chunkID},
+		},
+	}
+
+	svc := syncsvc.New(db, cr, tmpDir)
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmpDir, "binary.png"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, rawBytes) {
+		t.Errorf("content mismatch: got %v, want %v", got, rawBytes)
+		t.Logf("got (as string): %q", string(got))
 	}
 }

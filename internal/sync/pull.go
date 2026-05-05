@@ -144,8 +144,8 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 		chunkMap[c.ID] = c.Data
 	}
 
-	// Assemble content: each chunk is decrypted (or base64-decoded) individually
-	// and the raw bytes are concatenated.
+	// Assemble content: each chunk is decrypted (if vault is encrypted) and
+	// then decoded (if file is binary) before concatenation.
 	var content []byte
 	for _, id := range doc.Children {
 		data, ok := chunkMap[id]
@@ -153,23 +153,26 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 			return fmt.Errorf("missing chunk %q", id)
 		}
 
+		var piece []byte
+		var err error
 		if s.crypto.Enabled() {
-			plaintext, err := s.crypto.DecryptContent(data)
+			piece, err = s.crypto.DecryptContent(data)
 			if err != nil {
 				return fmt.Errorf("decrypt chunk %q: %w", id, err)
 			}
-			content = append(content, plaintext...)
-		} else if doc.Type == "newnote" {
-			// Binary file: chunks are base64-encoded.
-			decoded, err := base64.StdEncoding.DecodeString(data)
+		} else {
+			piece = []byte(data)
+		}
+
+		if doc.Type == "newnote" {
+			// Binary file: chunks are base64-encoded (either raw or inside ciphertext).
+			decoded, err := base64.StdEncoding.DecodeString(string(piece))
 			if err != nil {
 				return fmt.Errorf("decode chunk %q: %w", id, err)
 			}
-			content = append(content, decoded...)
-		} else {
-			// Plain text file: chunks are raw UTF-8 strings.
-			content = append(content, []byte(data)...)
+			piece = decoded
 		}
+		content = append(content, piece...)
 	}
 
 	// Write to disk.
