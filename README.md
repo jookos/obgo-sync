@@ -25,6 +25,7 @@ The app is configured via environment variables (or a `.env` file in the working
 | `COUCHDB_URL`   | yes      | Full CouchDB URL including credentials and database name: `https://<user>:<password>@<host>:<port>/<dbname>` |
 | `E2EE_PASSWORD` | no       | End-to-end encryption passphrase. Must match the passphrase configured in the Obsidian Livesync plugin if E2EE is enabled. |
 | `OBGO_DATA`     | yes      | Absolute path to the local vault directory on disk. |
+| `OBGO_PATH_OBFUSCATION` | no | Set to `on`, `off`, or `auto` (default). When enabled, file paths and metadata are encrypted in CouchDB. Only applicable when `E2EE_PASSWORD` is set. |
 
 A minimal `.env` file:
 
@@ -109,6 +110,8 @@ You will need to create the target database manually before first use, or let th
 ## E2EE compatibility
 
 `obgo` is compatible with Obsidian Livesync's end-to-end encryption. Set `E2EE_PASSWORD` to the same passphrase as the plugin. The app supports both the current V2 format (PBKDF2-SHA256 → HKDF-SHA256 + AES-256-GCM, `%=` prefix) and the legacy V1 format (PBKDF2-SHA512 + AES-256-GCM, `%` prefix) for reading. New chunks are always written in V2 format.
+
+The app also supports **Path and Property Obfuscation**. When enabled, vault-relative paths and metadata (like chunk lists and timestamps) are encrypted into a single blob and stored under hashed document IDs. This feature is controlled by `OBGO_PATH_OBFUSCATION`. By default (`auto`), `obgo` detects if the remote vault is obfuscated by looking for hashed IDs.
 
 The PBKDF2 salt is read from (and, on push, written to) the `_local/obsidian_livesync_sync_parameters` document in CouchDB — the same document used by the plugin.
 
