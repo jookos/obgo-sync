@@ -176,6 +176,70 @@ func TestLocalWatcher_NewSubdir(t *testing.T) {
 	_ = errCh
 }
 
+func TestLocalWatcher_MovedDirectoryTreeWatchesNestedDirs(t *testing.T) {
+	dir := t.TempDir()
+	suppress := NewSuppressSet()
+
+	var mu sync.Mutex
+	var gotPaths []string
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lw := NewLocalWatcher(dir, suppress, func(path string, op fsnotify.Op) {
+		mu.Lock()
+		gotPaths = append(gotPaths, path)
+		mu.Unlock()
+	}, nil)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- lw.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	staging := t.TempDir()
+	sourceTree := filepath.Join(staging, "imported")
+	nestedDir := filepath.Join(sourceTree, "nested")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(nestedDir, "deep.md")
+	if err := os.WriteFile(sourceFile, []byte("before move"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	movedTree := filepath.Join(dir, "imported")
+	if err := os.Rename(sourceTree, movedTree); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give the watcher time to process the top-level directory create event.
+	time.Sleep(100 * time.Millisecond)
+
+	testFile := filepath.Join(movedTree, "nested", "deep.md")
+	if err := os.WriteFile(testFile, []byte("after move"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := waitForEvent(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range gotPaths {
+			if p == testFile {
+				return true
+			}
+		}
+		return false
+	})
+
+	if !got {
+		t.Errorf("expected onChange to be called for file in moved nested tree %q, got paths: %v", testFile, gotPaths)
+	}
+
+	cancel()
+	_ = errCh
+}
+
 func TestLocalWatcher_DebouncedRemove_Gone(t *testing.T) {
 	dir := t.TempDir()
 	suppress := NewSuppressSet()

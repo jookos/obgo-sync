@@ -5,17 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 const defaultDebounceDur = 500 * time.Millisecond
+const defaultRescanInterval = 30 * time.Second
 
 type LocalWatcherOption func(*LocalWatcher)
 
 func WithDebounce(d time.Duration) LocalWatcherOption {
 	return func(w *LocalWatcher) { w.debounceDur = d }
+}
+
+func WithRescanInterval(d time.Duration) LocalWatcherOption {
+	return func(w *LocalWatcher) { w.rescanInterval = d }
 }
 
 // LocalWatcher watches the local vault directory for changes and pushes them to CouchDB.
@@ -25,7 +31,9 @@ type LocalWatcher struct {
 	onChange       func(path string, op fsnotify.Op)
 	onRemove       func(path string)
 	debounceDur    time.Duration
+	rescanInterval time.Duration
 	pendingRemoves map[string]*time.Timer
+	watchedDirs    map[string]struct{}
 	// removeFired receives paths from expired debounce timers. All map access
 	// stays in the Run goroutine; timer goroutines only do a channel send.
 	removeFired chan string
@@ -39,7 +47,9 @@ func NewLocalWatcher(dir string, suppress *SuppressSet, onChange func(string, fs
 		onChange:       onChange,
 		onRemove:       onRemove,
 		debounceDur:    defaultDebounceDur,
+		rescanInterval: defaultRescanInterval,
 		pendingRemoves: make(map[string]*time.Timer),
+		watchedDirs:    make(map[string]struct{}),
 		removeFired:    make(chan string, 32),
 	}
 	for _, o := range opts {
@@ -56,9 +66,19 @@ func (w *LocalWatcher) Run(ctx context.Context) error {
 	}
 	defer fw.Close()
 
+	w.watchedDirs = make(map[string]struct{})
+
 	// Add root dir and all subdirectories recursively.
 	if err := w.addDirRecursive(fw, w.dir); err != nil {
 		return err
+	}
+
+	var rescanC <-chan time.Time
+	var rescanTicker *time.Ticker
+	if w.rescanInterval > 0 {
+		rescanTicker = time.NewTicker(w.rescanInterval)
+		rescanC = rescanTicker.C
+		defer rescanTicker.Stop()
 	}
 
 	for {
@@ -71,6 +91,10 @@ func (w *LocalWatcher) Run(ctx context.Context) error {
 				return nil
 			}
 			w.handleEvent(fw, event)
+		case <-rescanC:
+			if err := w.addDirRecursive(fw, w.dir); err != nil {
+				fmt.Fprintf(os.Stderr, "fs watcher: rescan: %v\n", err)
+			}
 		case path := <-w.removeFired:
 			delete(w.pendingRemoves, path)
 			if w.onRemove != nil && !w.suppress.IsSuppressed(path) {
@@ -95,10 +119,38 @@ func (w *LocalWatcher) addDirRecursive(fw *fsnotify.Watcher, dir string) error {
 			if d.Name() != "." && len(d.Name()) > 0 && d.Name()[0] == '.' {
 				return filepath.SkipDir
 			}
-			return fw.Add(path)
+			return w.addWatchDir(fw, path)
 		}
 		return nil
 	})
+}
+
+func (w *LocalWatcher) addWatchDir(fw *fsnotify.Watcher, dir string) error {
+	dir = filepath.Clean(dir)
+	if _, ok := w.watchedDirs[dir]; ok {
+		return nil
+	}
+	if err := fw.Add(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "fs watcher: add %s: %v\n", dir, err)
+		return err
+	}
+	w.watchedDirs[dir] = struct{}{}
+	return nil
+}
+
+func (w *LocalWatcher) removeWatchDirRecursive(fw *fsnotify.Watcher, dir string) {
+	dir = filepath.Clean(dir)
+	for watched := range w.watchedDirs {
+		if watched == dir || isPathInside(watched, dir) {
+			_ = fw.Remove(watched)
+			delete(w.watchedDirs, watched)
+		}
+	}
+}
+
+func isPathInside(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
@@ -110,7 +162,7 @@ func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
 	switch {
 	case event.Has(fsnotify.Create):
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-			_ = fw.Add(event.Name)
+			_ = w.addDirRecursive(fw, event.Name)
 			return
 		}
 		w.cancelPendingRemove(event.Name)
@@ -124,6 +176,7 @@ func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
 			w.onChange(event.Name, event.Op)
 		}
 	case event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename):
+		w.removeWatchDirRecursive(fw, event.Name)
 		if w.suppress.IsSuppressed(event.Name) {
 			return
 		}
