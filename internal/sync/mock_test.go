@@ -25,7 +25,12 @@ func newMockClient() *mockClient {
 }
 
 func (m *mockClient) AllMetaDocs(ctx context.Context) ([]couchdb.MetaDoc, error) {
-	return m.metaDocs, nil
+	// Hand out copies. The real client decodes fresh structs on every request,
+	// and callers mutate what they get back (Push decrypts paths in place), so
+	// returning the fixture slice would let one call corrupt later ones.
+	out := make([]couchdb.MetaDoc, len(m.metaDocs))
+	copy(out, m.metaDocs)
+	return out, nil
 }
 
 func (m *mockClient) GetMeta(ctx context.Context, id string) (*couchdb.MetaDoc, error) {

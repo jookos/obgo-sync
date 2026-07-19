@@ -109,10 +109,20 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		if _, ok := pushedPaths[remote.Path]; ok {
 			continue // was just pushed — still exists
 		}
-		remote.Deleted = false
-		remote.DeletedApp = true
-		remote.Children = nil
-		if _, err := s.db.PutMeta(ctx, &remote); err != nil {
+		// Re-fetch the raw document before tombstoning. decryptDocPaths (step 2)
+		// replaced remote.Path with the PLAINTEXT path in place, and PutMeta
+		// serialises the struct verbatim — writing this copy back would replace
+		// an obfuscated vault's encrypted path blob with the cleartext path,
+		// leaking the path of every tombstoned document into the database.
+		raw, gerr := s.db.GetMeta(ctx, remote.ID)
+		if gerr != nil {
+			fmt.Fprintf(os.Stderr, "push: tombstone %q: fetch: %v\n", remote.Path, gerr)
+			continue
+		}
+		raw.Deleted = false
+		raw.DeletedApp = true
+		raw.Children = nil
+		if _, err := s.db.PutMeta(ctx, raw); err != nil {
 			fmt.Fprintf(os.Stderr, "push: tombstone %q: %v\n", remote.Path, err)
 			continue
 		}
