@@ -75,11 +75,21 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		if err != nil {
 			return err
 		}
+		name := d.Name()
 		if d.IsDir() {
+			// Skip hidden directories (.git, .obsidian, .claude, .trash, ...).
+			// The local watcher already ignores every dotted path, so without
+			// this the walk is inconsistent with watch mode — and a full push
+			// would upload e.g. the entire .git object store into the vault
+			// database and out to every synced device. walkRoot itself is never
+			// skipped, so an explicitly requested dotted filter still works.
+			if path != walkRoot && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		// Skip internal state files.
-		if name := filepath.Base(path); len(name) > 5 && name[:5] == ".obgo" {
+		// Skip hidden files, which also covers obgo's own .obgo* state files.
+		if strings.HasPrefix(name, ".") {
 			return nil
 		}
 		if err := s.pushFile(ctx, path); err != nil {
