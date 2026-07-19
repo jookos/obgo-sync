@@ -151,6 +151,42 @@ func (s *Service) List(ctx context.Context, prefix string) ([]couchdb.MetaDoc, e
 	return result, nil
 }
 
+// tombstonePrefix marks every live remote document whose path lies under prefix
+// (which must end in "/") as app-level deleted. Used when a directory
+// disappears locally: the kernel reports one event for the directory and none
+// for its children, so the children have to be resolved from the remote side.
+func (s *Service) tombstonePrefix(ctx context.Context, prefix string) {
+	docs, err := s.db.AllMetaDocs(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "watch: tombstone %q: list: %v\n", prefix, err)
+		return
+	}
+	s.decryptDocPaths(docs)
+	for _, doc := range docs {
+		if doc.IsDeleted() || !strings.HasPrefix(doc.Path, prefix) {
+			continue
+		}
+		// Re-fetch the raw document: decryptDocPaths replaced Path with the
+		// cleartext path in place and PutMeta serialises verbatim, so writing
+		// this copy back would leak the path on an obfuscated vault.
+		raw, gerr := s.db.GetMeta(ctx, doc.ID)
+		if gerr != nil {
+			fmt.Fprintf(os.Stderr, "watch: tombstone %q: fetch: %v\n", doc.Path, gerr)
+			continue
+		}
+		raw.Deleted = false
+		raw.DeletedApp = true
+		raw.Children = nil
+		if _, err := s.db.PutMeta(ctx, raw); err != nil {
+			fmt.Fprintf(os.Stderr, "watch: tombstone %q: %v\n", doc.Path, err)
+			continue
+		}
+		if s.OnTombstone != nil {
+			s.OnTombstone(doc.Path)
+		}
+	}
+}
+
 // Watch starts the local and/or remote watcher depending on the flags.
 // Blocks until ctx is cancelled.
 func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error {
@@ -259,7 +295,17 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 		docID := s.encodeDocID(relPath)
 		existing, err := s.db.GetMeta(ctx, docID)
 		if err != nil {
-			return // not in CouchDB, nothing to do
+			if !errors.Is(err, couchdb.ErrNotFound) {
+				fmt.Fprintf(os.Stderr, "watch: delete %q: %v\n", relPath, err)
+				return
+			}
+			// No document at this exact path, so the entry that disappeared was
+			// most likely a directory. A directory rename/removal arrives as a
+			// single event with no per-child events, so every document beneath
+			// it must be tombstoned here — otherwise the old tree stays live in
+			// CouchDB and is resurrected on every other device.
+			s.tombstonePrefix(ctx, relPath+"/")
+			return
 		}
 		existing.Deleted = false
 		existing.DeletedApp = true
