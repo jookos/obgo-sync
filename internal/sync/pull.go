@@ -139,23 +139,31 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 	}
 
 	// Build a map for ordering; BulkGet does not guarantee order.
-	chunkMap := make(map[string]string, len(chunks))
+	chunkMap := make(map[string]couchdb.ChunkDoc, len(chunks))
 	for _, c := range chunks {
-		chunkMap[c.ID] = c.Data
+		chunkMap[c.ID] = c
 	}
 
 	// Assemble content: each chunk is decrypted (if vault is encrypted) and
 	// then decoded (if file is binary) before concatenation.
 	var content []byte
 	for _, id := range doc.Children {
-		data, ok := chunkMap[id]
+		chunk, ok := chunkMap[id]
 		if !ok {
 			return fmt.Errorf("missing chunk %q", id)
 		}
+		data := chunk.Data
 
 		var piece []byte
 		var err error
-		if s.crypto.Enabled() {
+		// Decrypt only chunks actually flagged encrypted (e_). This vault is a
+		// MIX of encrypted and plaintext chunks — E2EE was enabled on an
+		// already-populated vault without a full rebuild, so old chunks remain
+		// plaintext and some even start with "%" (e.g. Templater directives).
+		// The ciphertext-prefix heuristic is therefore unreliable; the per-chunk
+		// e_ flag is the only correct signal, and it is what the official
+		// LiveSync client keys off.
+		if s.crypto.Enabled() && chunk.Encrypted {
 			piece, err = s.crypto.DecryptContent(data)
 			if err != nil {
 				return fmt.Errorf("decrypt chunk %q: %w", id, err)
