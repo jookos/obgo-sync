@@ -252,7 +252,11 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 			return
 		}
 		relPath = filepath.ToSlash(relPath)
-		docID := livesync.EncodeDocID(relPath)
+		// Must use the obfuscation-aware encoder: on a path-obfuscated vault the
+		// document ID is "f:<sha256>", not the plain lowercased path. Using the
+		// plain ID here made GetMeta return ErrNotFound for every delete, so
+		// local deletions were silently dropped and never tombstoned remotely.
+		docID := s.encodeDocID(relPath)
 		existing, err := s.db.GetMeta(ctx, docID)
 		if err != nil {
 			return // not in CouchDB, nothing to do
