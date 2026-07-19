@@ -125,6 +125,34 @@ func (w *LocalWatcher) addDirRecursive(fw *fsnotify.Watcher, dir string) error {
 	})
 }
 
+// emitExistingFiles fires onChange for every non-hidden file already present
+// under dir. Used when a directory appears fully-formed (a move or rename), a
+// case for which the kernel emits no per-file events. Hidden entries are
+// skipped to match handleEvent.
+func (w *LocalWatcher) emitExistingFiles(dir string) {
+	if w.onChange == nil {
+		return
+	}
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable paths
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != dir && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(name, ".") || w.suppress.IsSuppressed(path) {
+			return nil
+		}
+		w.cancelPendingRemove(path)
+		w.onChange(path, fsnotify.Create)
+		return nil
+	})
+}
+
 func (w *LocalWatcher) addWatchDir(fw *fsnotify.Watcher, dir string) error {
 	dir = filepath.Clean(dir)
 	if _, ok := w.watchedDirs[dir]; ok {
@@ -163,6 +191,11 @@ func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
 	case event.Has(fsnotify.Create):
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 			_ = w.addDirRecursive(fw, event.Name)
+			// A directory can appear already populated — `mv` of a whole tree,
+			// an extracted archive, a restored backup. The kernel reports only
+			// the directory itself and emits no per-file Create events, so
+			// without walking it here the contained files are never pushed.
+			w.emitExistingFiles(event.Name)
 			return
 		}
 		w.cancelPendingRemove(event.Name)
