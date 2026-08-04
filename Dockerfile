@@ -1,5 +1,8 @@
 # -- Build stage
-FROM golang:1.26.0-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.0-bookworm AS build
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 
@@ -9,7 +12,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY lib ./lib
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o obgo ./cmd/obgo
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o obgo ./cmd/obgo
 
 # image
 
