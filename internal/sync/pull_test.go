@@ -33,6 +33,57 @@ func TestPull_EmptyVault(t *testing.T) {
 	}
 }
 
+func TestPull_HiddenFileIgnoredByDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	chunkID := "h:abc123"
+	db.chunkDocs[chunkID] = couchdb.ChunkDoc{ID: chunkID, Data: "hidden content", Type: "leaf"}
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: ".agents/skill.md", Type: "plain", Path: ".agents/skill.md", Children: []string{chunkID}},
+	}
+
+	// A remote hidden file (e.g. pushed by another device with
+	// OBGO_SYNC_HIDDEN=true) must not be written locally when this device
+	// has not opted in — otherwise the file becomes stuck: pulled down but
+	// then untouchable by push/watch, which both treat it as ignored.
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, ".agents", "skill.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected hidden remote file to be skipped, stat err: %v", err)
+	}
+}
+
+func TestPull_SyncHiddenPullsHiddenFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+	svc.SetSyncHidden(true)
+
+	chunkID := "h:abc123"
+	db.chunkDocs[chunkID] = couchdb.ChunkDoc{ID: chunkID, Data: "hidden content", Type: "leaf"}
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: ".agents/skill.md", Type: "plain", Path: ".agents/skill.md", Children: []string{chunkID}},
+	}
+
+	if err := svc.Pull(context.Background(), ""); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(tmpDir, ".agents", "skill.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "hidden content" {
+		t.Errorf("content mismatch: got %q", got)
+	}
+}
+
 func TestPull_OneDocOneChunk(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := newMockClient()

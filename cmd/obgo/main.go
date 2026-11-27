@@ -130,6 +130,7 @@ Without an argument all documents are listed. Provide a folder path ending with
 			cr := crypto.New(cfg.E2EEPassword)
 			svc := sync.New(db, cr, cfg.DataPath)
 			svc.SetObfuscationMode(cfg.PathObfuscationMode())
+			svc.SetSyncHidden(cfg.SyncHidden)
 			docs, err := svc.List(cmd.Context(), prefix)
 			if err != nil {
 				return fmt.Errorf("list failed: %w", err)
@@ -198,6 +199,7 @@ func run(parentCtx context.Context, envFile string, watchLocal, watchRemote, sil
 	// Create sync service.
 	svc := sync.New(db, cr, cfg.DataPath)
 	svc.SetObfuscationMode(cfg.PathObfuscationMode())
+	svc.SetSyncHidden(cfg.SyncHidden)
 
 	// Set up context with cancellation for graceful shutdown.
 	ctx, cancel := context.WithCancel(parentCtx)

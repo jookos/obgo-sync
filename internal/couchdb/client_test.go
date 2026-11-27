@@ -2,6 +2,7 @@ package couchdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,21 @@ func TestHTTPClient_Changes_ReceivesEvents(t *testing.T) {
 		if r.URL.Path != "/testdb/_changes" {
 			http.NotFound(w, r)
 			return
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if got := r.URL.Query().Get("filter"); got != "_selector" {
+			t.Errorf("expected filter=_selector, got %q", got)
+		}
+		var body struct {
+			Selector map[string]interface{} `json:"selector"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode selector: %v", err)
+		}
+		if len(body.Selector) == 0 {
+			t.Error("expected a non-empty changes selector")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -103,6 +119,37 @@ func TestHTTPClient_Changes_ReceivesEvents(t *testing.T) {
 	}
 	if !events[1].Deleted {
 		t.Error("events[1].Deleted: expected true")
+	}
+}
+
+func TestHTTPClient_AllMetaDocs_SkipsNonFileNamespaces(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"rows":[
+			{"doc":{"_id":"f:actual","type":"plain","path":"note.md"}},
+			{"doc":{"_id":"i:f:actual","type":"plain","path":"i:note.md"}},
+			{"doc":{"_id":"ix:device","type":"newnote","path":"ix:device"}},
+			{"doc":{"_id":"h:chunk","type":"leaf","data":"payload"}},
+			{"doc":{"_id":"gone.md","_deleted":true}},
+			{"doc":{"_id":"i:gone.md","_deleted":true}}
+		]}`)
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	c, err := New(srv.URL + "/testdb")
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	docs, err := c.AllMetaDocs(context.Background())
+	if err != nil {
+		t.Fatalf("AllMetaDocs(): %v", err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("expected 2 file documents, got %d: %#v", len(docs), docs)
+	}
+	if docs[0].ID != "f:actual" || docs[1].ID != "gone.md" {
+		t.Fatalf("unexpected document IDs: %q, %q", docs[0].ID, docs[1].ID)
 	}
 }
 

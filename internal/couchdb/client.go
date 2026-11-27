@@ -173,8 +173,8 @@ func (c *HTTPClient) postJSON(ctx context.Context, rawURL string, body interface
 	return json.NewDecoder(resp.Body).Decode(dst)
 }
 
-// AllMetaDocs fetches all non-chunk documents from CouchDB and returns those
-// with type "plain" or "newnote" that are not deleted.
+// AllMetaDocs fetches file metadata and file tombstones from CouchDB while
+// excluding chunk and LiveSync-internal namespaces.
 func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 	rawURL := c.dbURL("_all_docs") + "?include_docs=true&conflicts=true"
 	var result struct {
@@ -191,16 +191,14 @@ func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 		if row.Doc == nil {
 			continue
 		}
+		if isNonFileDocID(row.Doc.ID) {
+			continue
+		}
 		if row.Doc.Deleted {
-			// Lean tombstones created by Obsidian/PouchDB (HTTP DELETE) have no
-			// type field. Identify file docs by ruling out known non-file ID prefixes.
-			// Note: f: (obfuscated path) tombstones are included so the sync layer
-			// can decrypt their path field and delete the correct local file.
-			id := row.Doc.ID
-			if !strings.HasPrefix(id, "h:") && !strings.HasPrefix(id, "i:") &&
-				!strings.HasPrefix(id, "ix:") {
-				docs = append(docs, *row.Doc)
-			}
+			// Lean file tombstones created by Obsidian/PouchDB (HTTP DELETE)
+			// have no type field. Non-file IDs were excluded above; f: IDs remain
+			// so the sync layer can resolve obfuscated file deletions.
+			docs = append(docs, *row.Doc)
 			continue
 		}
 		if row.Doc.Type != "plain" && row.Doc.Type != "newnote" {
@@ -209,6 +207,11 @@ func (c *HTTPClient) AllMetaDocs(ctx context.Context) ([]MetaDoc, error) {
 		docs = append(docs, *row.Doc)
 	}
 	return docs, nil
+}
+
+func isNonFileDocID(id string) bool {
+	return strings.HasPrefix(id, "h:") || strings.HasPrefix(id, "i:") ||
+		strings.HasPrefix(id, "ix:")
 }
 
 // GetMeta fetches a single meta document by its encoded document ID.
@@ -356,8 +359,8 @@ func (c *HTTPClient) BulkDocs(ctx context.Context, docs []interface{}) error {
 	}
 	body := map[string]interface{}{"docs": docs}
 	var results []struct {
-		ID    string `json:"id"`
-		Error string `json:"error"`
+		ID     string `json:"id"`
+		Error  string `json:"error"`
 		Reason string `json:"reason"`
 	}
 	if err := c.postJSON(ctx, c.dbURL("_bulk_docs"), body, &results); err != nil {
@@ -416,12 +419,17 @@ func (c *HTTPClient) Changes(ctx context.Context, since string) (<-chan ChangeEv
 // until the connection closes or ctx is cancelled. lastSeq is updated as events arrive.
 func (c *HTTPClient) streamChanges(ctx context.Context, since string, ch chan<- ChangeEvent, lastSeq *string) error {
 	rawURL := c.dbURL("_changes") +
-		"?feed=continuous&heartbeat=10000&include_docs=true&style=all_docs&conflicts=true&since=" +
+		"?feed=continuous&heartbeat=10000&include_docs=true&style=all_docs&conflicts=true&filter=_selector&since=" +
 		url.QueryEscape(since)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	// Chunk documents can exceed the scanner limit by many megabytes and are
+	// never actionable by the watcher. Filter them at CouchDB while retaining
+	// file metadata and lean deletion tombstones.
+	selector := `{"selector":{"$or":[{"type":{"$in":["plain","newnote"]}},{"_deleted":{"$eq":true}}]}}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, strings.NewReader(selector))
 	if err != nil {
 		return fmt.Errorf("streamChanges: build request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("streamChanges: connect: %w", err)
@@ -429,8 +437,7 @@ func (c *HTTPClient) streamChanges(ctx context.Context, since string, ch chan<- 
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
-	// Chunk docs can have data fields up to ~136 KB (100 KB base64-encoded).
-	// Increase the scanner buffer to avoid ErrTooLong on those lines.
+	// File metadata can contain encrypted path blobs and conflict metadata.
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()

@@ -37,6 +37,12 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 
 	// 3. Single-file shortcut.
 	if filter != "" && !strings.HasSuffix(filter, "/") {
+		// A single named file is always evaluated as hidden-or-not on its own
+		// merits (no filterRoot exemption) — naming one hidden file explicitly
+		// does not opt it in.
+		if shouldSkipLocalPath(filter, "", s.syncHidden) {
+			return nil
+		}
 		absPath := filepath.Join(s.dataDir, filepath.FromSlash(filter))
 		if _, err := os.Stat(absPath); err != nil {
 			// File missing locally: tombstone the remote doc if it exists.
@@ -66,8 +72,10 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 
 	// 4. Walk a directory (whole vault or a folder prefix).
 	walkRoot := s.dataDir
+	walkFilter := "" // vault-relative filter, trailing slash trimmed
 	if filter != "" {
 		walkRoot = filepath.Join(s.dataDir, filepath.FromSlash(filter))
+		walkFilter = strings.TrimSuffix(filter, "/")
 	}
 	pushedPaths := make(map[string]struct{})
 	var count int
@@ -75,28 +83,25 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 		if err != nil {
 			return err
 		}
-		name := d.Name()
 		if d.IsDir() {
-			// Skip hidden directories (.git, .obsidian, .claude, .trash, ...).
-			// The local watcher already ignores every dotted path, so without
-			// this the walk is inconsistent with watch mode — and a full push
-			// would upload e.g. the entire .git object store into the vault
-			// database and out to every synced device. walkRoot itself is never
-			// skipped, so an explicitly requested dotted filter still works.
-			if path != walkRoot && strings.HasPrefix(name, ".") {
+			// Protected names (.git, .obgo*) are pruned even at walkRoot itself;
+			// hidden-but-not-protected names are only pruned below walkRoot, so
+			// an explicitly requested hidden folder (e.g. "obgo push .obsidian/")
+			// still works without OBGO_SYNC_HIDDEN.
+			if isProtectedLocalName(d.Name()) || (path != walkRoot && shouldSkipLocalName(d.Name(), s.syncHidden)) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		// Skip hidden files, which also covers obgo's own .obgo* state files.
-		if strings.HasPrefix(name, ".") {
+		relPath, _ := filepath.Rel(s.dataDir, path)
+		relPath = filepath.ToSlash(relPath)
+		if shouldSkipLocalPath(relPath, walkFilter, s.syncHidden) {
 			return nil
 		}
 		if err := s.pushFile(ctx, path); err != nil {
 			return err
 		}
-		relPath, _ := filepath.Rel(s.dataDir, path)
-		pushedPaths[filepath.ToSlash(relPath)] = struct{}{}
+		pushedPaths[relPath] = struct{}{}
 		count++
 		if s.OnPushFile != nil {
 			s.OnPushFile(count)
@@ -111,6 +116,9 @@ func (s *Service) Push(ctx context.Context, filter string) error {
 	for _, remote := range remoteDocs {
 		if remote.IsDeleted() {
 			continue // already tombstoned
+		}
+		if shouldSkipLocalPath(remote.Path, walkFilter, s.syncHidden) {
+			continue
 		}
 		// Only reconcile paths inside the walked scope.
 		if filter != "" && !strings.HasPrefix(remote.Path, filter) {

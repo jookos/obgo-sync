@@ -8,10 +8,11 @@ import (
 
 // Config holds the runtime configuration for obgo-live.
 type Config struct {
-	CouchDBURL        string
-	E2EEPassword      string
-	DataPath          string
-	PathObfuscation   string // raw value of OBGO_PATH_OBFUSCATION
+	CouchDBURL      string
+	E2EEPassword    string
+	DataPath        string
+	PathObfuscation string // raw value of OBGO_PATH_OBFUSCATION
+	SyncHidden      bool
 }
 
 // PathObfuscationMode normalises OBGO_PATH_OBFUSCATION to one of "auto", "on", "off".
@@ -26,7 +27,8 @@ func (c *Config) PathObfuscationMode() string {
 	}
 }
 
-// Load reads COUCHDB_URL, E2EE_PASSWORD, OBGO_DATA, OBGO_PATH_OBFUSCATION from environment.
+// Load reads COUCHDB_URL, E2EE_PASSWORD, OBGO_DATA, OBGO_PATH_OBFUSCATION,
+// and OBGO_SYNC_HIDDEN from environment.
 // Returns error if COUCHDB_URL or OBGO_DATA are empty.
 func Load() (*Config, error) {
 	cfg := &Config{
@@ -34,6 +36,7 @@ func Load() (*Config, error) {
 		E2EEPassword:    os.Getenv("E2EE_PASSWORD"),
 		DataPath:        os.Getenv("OBGO_DATA"),
 		PathObfuscation: os.Getenv("OBGO_PATH_OBFUSCATION"),
+		SyncHidden:      truthy(os.Getenv("OBGO_SYNC_HIDDEN")),
 	}
 
 	if cfg.CouchDBURL == "" {
@@ -44,4 +47,13 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func truthy(value string) bool {
+	switch strings.ToLower(value) {
+	case "true", "yes", "1", "on":
+		return true
+	default:
+		return false
+	}
 }

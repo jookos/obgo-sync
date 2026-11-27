@@ -30,6 +30,7 @@ func TestLoad_AllVarsSet(t *testing.T) {
 	t.Setenv("COUCHDB_URL", "http://admin:password@localhost:5984/vault")
 	t.Setenv("OBGO_DATA", "/tmp/vault")
 	t.Setenv("E2EE_PASSWORD", "supersecret")
+	t.Setenv("OBGO_SYNC_HIDDEN", "true")
 
 	cfg, err := Load()
 	if err != nil {
@@ -44,6 +45,9 @@ func TestLoad_AllVarsSet(t *testing.T) {
 	if cfg.E2EEPassword != "supersecret" {
 		t.Errorf("unexpected E2EEPassword: %q", cfg.E2EEPassword)
 	}
+	if !cfg.SyncHidden {
+		t.Error("expected SyncHidden to be true")
+	}
 }
 
 func TestLoad_E2EEPasswordOptional(t *testing.T) {
@@ -57,5 +61,27 @@ func TestLoad_E2EEPasswordOptional(t *testing.T) {
 	}
 	if cfg.E2EEPassword != "" {
 		t.Errorf("expected empty E2EEPassword, got %q", cfg.E2EEPassword)
+	}
+	if cfg.SyncHidden {
+		t.Error("expected SyncHidden to default to false")
+	}
+}
+
+func TestLoad_SyncHiddenFalseValues(t *testing.T) {
+	for _, value := range []string{"false", "no", "0", "off", ""} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("COUCHDB_URL", "http://admin:password@localhost:5984/vault")
+			t.Setenv("OBGO_DATA", "/tmp/vault")
+			t.Setenv("E2EE_PASSWORD", "")
+			t.Setenv("OBGO_SYNC_HIDDEN", value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.SyncHidden {
+				t.Errorf("expected SyncHidden to be false for %q", value)
+			}
+		})
 	}
 }

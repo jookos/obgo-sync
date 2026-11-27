@@ -89,3 +89,59 @@ func TestLocalWatcher_MovedDirectoryTreePushesExistingContents(t *testing.T) {
 	cancel()
 	_ = errCh
 }
+
+func TestLocalWatcher_SyncHiddenMovedDirectoryPushesExistingContents(t *testing.T) {
+	dir := t.TempDir()
+	suppress := NewSuppressSet()
+
+	var mu sync.Mutex
+	var gotPaths []string
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lw := NewLocalWatcher(dir, suppress, func(path string, op fsnotify.Op) {
+		mu.Lock()
+		gotPaths = append(gotPaths, path)
+		mu.Unlock()
+	}, nil, WithSyncHidden(true))
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- lw.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	staging := t.TempDir()
+	sourceTree := filepath.Join(staging, ".agents")
+	if err := os.MkdirAll(sourceTree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceTree, "skill.md"), []byte("instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	moved := filepath.Join(dir, ".agents")
+	if err := os.Rename(sourceTree, moved); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(moved, "skill.md")
+
+	if !waitForEvent(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, path := range gotPaths {
+			if path == want {
+				return true
+			}
+		}
+		return false
+	}) {
+		mu.Lock()
+		snapshot := append([]string(nil), gotPaths...)
+		mu.Unlock()
+		t.Errorf("expected onChange for pre-existing hidden file %q, got: %v", want, snapshot)
+	}
+
+	cancel()
+	_ = errCh
+}

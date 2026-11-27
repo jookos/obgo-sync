@@ -92,6 +92,153 @@ func TestPush_SubdirFile(t *testing.T) {
 	}
 }
 
+func TestPush_ExplicitHiddenFolderFilterStillPushes(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	hiddenDir := filepath.Join(tmpDir, ".obsidian")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "app.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicitly requesting a hidden folder should push its contents even
+	// with OBGO_SYNC_HIDDEN off, matching the same exemption the walk
+	// already grants walkRoot for directory pruning.
+	if err := svc.Push(context.Background(), ".obsidian/"); err != nil {
+		t.Fatalf("Push .obsidian/: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta call, got %d", len(db.putMetaDocs))
+	}
+	if db.putMetaDocs[0].Path != ".obsidian/app.json" {
+		t.Errorf("path: got %q, want %q", db.putMetaDocs[0].Path, ".obsidian/app.json")
+	}
+}
+
+func TestPush_ExplicitHiddenFolderFilterStillIgnoresGitDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Even an explicit ".git/" filter must never push — protected names are
+	// never overridable.
+	if err := svc.Push(context.Background(), ".git/"); err != nil {
+		t.Fatalf("Push .git/: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 0 {
+		t.Fatalf("expected .git to remain protected, got %d PutMeta calls", len(db.putMetaDocs))
+	}
+}
+
+func TestPush_HiddenDirIgnoredByDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	hiddenDir := filepath.Join(tmpDir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "skill.md"), []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background(), ""); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 0 {
+		t.Fatalf("expected hidden file to be ignored by default, got %d PutMeta calls", len(db.putMetaDocs))
+	}
+}
+
+func TestPush_SyncHiddenPushesHiddenDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+	svc.SetSyncHidden(true)
+
+	hiddenDir := filepath.Join(tmpDir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "skill.md"), []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background(), ""); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta call, got %d", len(db.putMetaDocs))
+	}
+	if db.putMetaDocs[0].Path != ".agents/skill.md" {
+		t.Errorf("path: got %q, want %q", db.putMetaDocs[0].Path, ".agents/skill.md")
+	}
+}
+
+func TestPush_SyncHiddenStillIgnoresGitDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+	svc.SetSyncHidden(true)
+
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background(), ""); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 0 {
+		t.Fatalf("expected .git file to be ignored, got %d PutMeta calls", len(db.putMetaDocs))
+	}
+}
+
+func TestPush_HiddenRemoteDocIgnoredByDefaultDuringReconcile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	db.metaDocs = []couchdb.MetaDoc{
+		{ID: ".agents/skill.md", Type: "plain", Path: ".agents/skill.md", Rev: "1-hidden"},
+	}
+
+	if err := svc.Push(context.Background(), ""); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 0 {
+		t.Fatalf("expected hidden remote doc to be ignored, got %d PutMeta calls", len(db.putMetaDocs))
+	}
+}
+
 func TestPush_E2EE(t *testing.T) {
 	tmpDir := t.TempDir()
 	db := newMockClient()
@@ -141,6 +288,56 @@ func TestPush_SingleFilePath(t *testing.T) {
 	}
 	if db.putMetaDocs[0].Path != "wanted.md" {
 		t.Errorf("pushed wrong file: got %q, want %q", db.putMetaDocs[0].Path, "wanted.md")
+	}
+}
+
+func TestPush_SingleHiddenFileIgnoredByDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+
+	hiddenDir := filepath.Join(tmpDir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "skill.md"), []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background(), ".agents/skill.md"); err != nil {
+		t.Fatalf("Push single hidden file: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 0 {
+		t.Fatalf("expected hidden file to be ignored by default, got %d PutMeta calls", len(db.putMetaDocs))
+	}
+}
+
+func TestPush_SyncHiddenPushesSingleHiddenFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	db := newMockClient()
+	cr := crypto.New("")
+	svc := syncsvc.New(db, cr, tmpDir)
+	svc.SetSyncHidden(true)
+
+	hiddenDir := filepath.Join(tmpDir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "skill.md"), []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Push(context.Background(), ".agents/skill.md"); err != nil {
+		t.Fatalf("Push single hidden file: %v", err)
+	}
+
+	if len(db.putMetaDocs) != 1 {
+		t.Fatalf("expected 1 PutMeta call, got %d", len(db.putMetaDocs))
+	}
+	if db.putMetaDocs[0].Path != ".agents/skill.md" {
+		t.Errorf("path: got %q, want %q", db.putMetaDocs[0].Path, ".agents/skill.md")
 	}
 }
 

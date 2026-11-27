@@ -22,12 +22,13 @@ var ErrNotImplemented = errors.New("not implemented")
 
 // Service orchestrates pull, push, and watch operations.
 type Service struct {
-	db              couchdb.Client
-	crypto          *crypto.Service
-	dataDir         string
-	suppress        *watcher.SuppressSet
-	obfuscated      bool   // true when the remote vault uses path obfuscation
-	obfuscationMode string // "auto" | "on" | "off"; set by SetObfuscationMode
+	db               couchdb.Client
+	crypto           *crypto.Service
+	dataDir          string
+	suppress         *watcher.SuppressSet
+	obfuscated       bool   // true when the remote vault uses path obfuscation
+	obfuscationMode  string // "auto" | "on" | "off"; set by SetObfuscationMode
+	syncHidden       bool
 	OnPullFile       func(n int)
 	OnPushFile       func(n int)
 	OnWatchEvent     func(path string, toRemote bool)
@@ -54,6 +55,12 @@ func (s *Service) SetObfuscationMode(mode string) {
 	if mode == "on" {
 		s.obfuscated = true
 	}
+}
+
+// SetSyncHidden controls whether local watch mode observes dotfiles and
+// dot-directories. Internal .obgo* paths and .git remain ignored.
+func (s *Service) SetSyncHidden(syncHidden bool) {
+	s.syncHidden = syncHidden
 }
 
 // loadSalt fetches the PBKDF2 salt from _local/obsidian_livesync_sync_parameters
@@ -321,7 +328,7 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 
 	if watchLocal && watchRemote {
 		rw := watcher.NewRemoteWatcher(s.db, s.dataDir, remoteOnEvent)
-		lw := watcher.NewLocalWatcher(s.dataDir, s.suppress, localOnChange, localOnRemove)
+		lw := watcher.NewLocalWatcher(s.dataDir, s.suppress, localOnChange, localOnRemove, watcher.WithSyncHidden(s.syncHidden))
 
 		remoteErrCh := make(chan error, 1)
 		localErrCh := make(chan error, 1)
@@ -342,6 +349,6 @@ func (s *Service) Watch(ctx context.Context, watchLocal, watchRemote bool) error
 	}
 
 	// watchLocal only
-	lw := watcher.NewLocalWatcher(s.dataDir, s.suppress, localOnChange, localOnRemove)
+	lw := watcher.NewLocalWatcher(s.dataDir, s.suppress, localOnChange, localOnRemove, watcher.WithSyncHidden(s.syncHidden))
 	return lw.Run(ctx)
 }

@@ -26,12 +26,14 @@ The app is configured via environment variables (or a `.env` file in the working
 | `E2EE_PASSWORD` | no       | End-to-end encryption passphrase. Must match the passphrase configured in the Obsidian Livesync plugin if E2EE is enabled. |
 | `OBGO_DATA`     | yes      | Absolute path to the local vault directory on disk. |
 | `OBGO_PATH_OBFUSCATION` | no | Set to `on`, `off`, or `auto` (default). When enabled, file paths and metadata are encrypted in CouchDB. Only applicable when `E2EE_PASSWORD` is set. |
+| `OBGO_SYNC_HIDDEN` | no | Set to `true` to watch and push local dotfiles and dot-directories. Internal `.obgo*` paths and `.git` are always ignored. |
 
 A minimal `.env` file:
 
 ```dotenv
 COUCHDB_URL=http://admin:password@localhost:5984/myvault-livesync-v2
 OBGO_DATA=/home/user/vault
+OBGO_SYNC_HIDDEN=false
 ```
 
 Use `--env-file <path>` to load a different file (default: `.env` in the current directory).

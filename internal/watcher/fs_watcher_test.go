@@ -240,6 +240,149 @@ func TestLocalWatcher_MovedDirectoryTreeWatchesNestedDirs(t *testing.T) {
 	_ = errCh
 }
 
+func TestLocalWatcher_HiddenDirIgnoredByDefault(t *testing.T) {
+	dir := t.TempDir()
+	suppress := NewSuppressSet()
+
+	var mu sync.Mutex
+	var gotPaths []string
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lw := NewLocalWatcher(dir, suppress, func(path string, op fsnotify.Op) {
+		mu.Lock()
+		gotPaths = append(gotPaths, path)
+		mu.Unlock()
+	}, nil)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- lw.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	hiddenDir := filepath.Join(dir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	testFile := filepath.Join(hiddenDir, "skill.md")
+	if err := os.WriteFile(testFile, []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range gotPaths {
+		if p == testFile {
+			t.Errorf("expected hidden file %q to be ignored by default, got paths: %v", testFile, gotPaths)
+		}
+	}
+
+	cancel()
+	_ = errCh
+}
+
+func TestLocalWatcher_SyncHiddenWatchesHiddenDir(t *testing.T) {
+	dir := t.TempDir()
+	suppress := NewSuppressSet()
+
+	var mu sync.Mutex
+	var gotPaths []string
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lw := NewLocalWatcher(dir, suppress, func(path string, op fsnotify.Op) {
+		mu.Lock()
+		gotPaths = append(gotPaths, path)
+		mu.Unlock()
+	}, nil, WithSyncHidden(true))
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- lw.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	hiddenDir := filepath.Join(dir, ".agents")
+	if err := os.Mkdir(hiddenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	testFile := filepath.Join(hiddenDir, "skill.md")
+	if err := os.WriteFile(testFile, []byte("hidden content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := waitForEvent(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range gotPaths {
+			if p == testFile {
+				return true
+			}
+		}
+		return false
+	})
+
+	if !got {
+		t.Errorf("expected onChange to be called for hidden file %q, got paths: %v", testFile, gotPaths)
+	}
+
+	cancel()
+	_ = errCh
+}
+
+func TestLocalWatcher_SyncHiddenStillIgnoresGitDir(t *testing.T) {
+	dir := t.TempDir()
+	suppress := NewSuppressSet()
+
+	var mu sync.Mutex
+	var gotPaths []string
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lw := NewLocalWatcher(dir, suppress, func(path string, op fsnotify.Op) {
+		mu.Lock()
+		gotPaths = append(gotPaths, path)
+		mu.Unlock()
+	}, nil, WithSyncHidden(true))
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- lw.Run(ctx) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	testFile := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(testFile, []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range gotPaths {
+		if p == testFile {
+			t.Errorf("expected .git file %q to remain ignored, got paths: %v", testFile, gotPaths)
+		}
+	}
+
+	cancel()
+	_ = errCh
+}
+
 func TestLocalWatcher_DebouncedRemove_Gone(t *testing.T) {
 	dir := t.TempDir()
 	suppress := NewSuppressSet()

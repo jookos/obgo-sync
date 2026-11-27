@@ -24,6 +24,10 @@ func WithRescanInterval(d time.Duration) LocalWatcherOption {
 	return func(w *LocalWatcher) { w.rescanInterval = d }
 }
 
+func WithSyncHidden(syncHidden bool) LocalWatcherOption {
+	return func(w *LocalWatcher) { w.syncHidden = syncHidden }
+}
+
 // LocalWatcher watches the local vault directory for changes and pushes them to CouchDB.
 type LocalWatcher struct {
 	dir            string
@@ -32,6 +36,7 @@ type LocalWatcher struct {
 	onRemove       func(path string)
 	debounceDur    time.Duration
 	rescanInterval time.Duration
+	syncHidden     bool
 	pendingRemoves map[string]*time.Timer
 	watchedDirs    map[string]struct{}
 	// removeFired receives paths from expired debounce timers. All map access
@@ -115,8 +120,7 @@ func (w *LocalWatcher) addDirRecursive(fw *fsnotify.Watcher, dir string) error {
 			return nil // skip unreadable paths
 		}
 		if d.IsDir() {
-			// Skip hidden dirs (e.g. .git)
-			if d.Name() != "." && len(d.Name()) > 0 && d.Name()[0] == '.' {
+			if w.shouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return w.addWatchDir(fw, path)
@@ -125,10 +129,10 @@ func (w *LocalWatcher) addDirRecursive(fw *fsnotify.Watcher, dir string) error {
 	})
 }
 
-// emitExistingFiles fires onChange for every non-hidden file already present
+// emitExistingFiles fires onChange for every eligible file already present
 // under dir. Used when a directory appears fully-formed (a move or rename), a
-// case for which the kernel emits no per-file events. Hidden entries are
-// skipped to match handleEvent.
+// case for which the kernel emits no per-file events. Hidden entries follow
+// the same opt-in policy as handleEvent.
 func (w *LocalWatcher) emitExistingFiles(dir string) {
 	if w.onChange == nil {
 		return
@@ -139,12 +143,12 @@ func (w *LocalWatcher) emitExistingFiles(dir string) {
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != dir && strings.HasPrefix(name, ".") {
+			if path != dir && w.shouldSkipDir(name) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasPrefix(name, ".") || w.suppress.IsSuppressed(path) {
+		if w.shouldSkipPath(path) || w.suppress.IsSuppressed(path) {
 			return nil
 		}
 		w.cancelPendingRemove(path)
@@ -182,8 +186,7 @@ func isPathInside(path, dir string) bool {
 }
 
 func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
-	base := filepath.Base(event.Name)
-	if len(base) > 0 && base[0] == '.' {
+	if w.shouldSkipPath(event.Name) {
 		return
 	}
 
@@ -224,6 +227,32 @@ func (w *LocalWatcher) handleEvent(fw *fsnotify.Watcher, event fsnotify.Event) {
 			}
 		})
 	}
+}
+
+func (w *LocalWatcher) shouldSkipDir(name string) bool {
+	if name == "." {
+		return false
+	}
+	if isProtectedName(name) {
+		return true
+	}
+	return !w.syncHidden && isHiddenName(name)
+}
+
+func (w *LocalWatcher) shouldSkipPath(path string) bool {
+	base := filepath.Base(path)
+	if isProtectedName(base) {
+		return true
+	}
+	return !w.syncHidden && isHiddenName(base)
+}
+
+func isHiddenName(name string) bool {
+	return len(name) > 0 && name[0] == '.'
+}
+
+func isProtectedName(name string) bool {
+	return name == ".git" || strings.HasPrefix(name, ".obgo")
 }
 
 func (w *LocalWatcher) cancelPendingRemove(path string) {

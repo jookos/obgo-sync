@@ -118,6 +118,13 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 		if path == "" || livesync.IsObfuscatedDocID(path) {
 			return nil
 		}
+		// Mirrors the push-side policy: never touch .git/.obgo* locally, and
+		// leave hidden paths alone unless this device opted in. Without this,
+		// a hidden file another (opted-in) device deleted remotely could still
+		// trigger a local remove/suppress on a device that never pulled it.
+		if shouldSkipLocalPath(path, "", s.syncHidden) {
+			return nil
+		}
 		// resolveCase handles case mismatches between the lowercase doc ID
 		// and the original-cased path stored on a case-sensitive filesystem.
 		absPath := resolveCase(s.dataDir, path)
@@ -128,8 +135,10 @@ func (s *Service) applyRemoteDoc(ctx context.Context, doc couchdb.MetaDoc) error
 		}
 		return nil
 	}
-	// Skip internal state files that should never be synced.
-	if base := filepath.Base(doc.Path); len(base) > 5 && base[:5] == ".obgo" {
+	// Skip internal state files, and hidden paths unless this device opted
+	// in via OBGO_SYNC_HIDDEN — otherwise a device with the flag off would
+	// pull a file it will then refuse to push or delete (see push.go).
+	if shouldSkipLocalPath(doc.Path, "", s.syncHidden) {
 		return nil
 	}
 	// Fetch chunks.
