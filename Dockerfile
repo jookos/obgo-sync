@@ -1,5 +1,5 @@
 # -- Build stage
-FROM --platform=$BUILDPLATFORM golang:1.26.0-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm AS build
 
 ARG TARGETOS
 ARG TARGETARCH
